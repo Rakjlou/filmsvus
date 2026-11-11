@@ -10,7 +10,7 @@ npm run import:xlsx
 npm run dev
 ```
 
-`npm run dev` lance Fastify sur `http://127.0.0.1:3000` et Vite sur
+`npm run dev` lance Fastify sur `http://127.0.0.1:3210` et Vite sur
 `http://127.0.0.1:4200` : ouvrir **l’adresse Vite**. Vite relaie `/api` et `/posters`
 vers Fastify, sans CORS ni clé dans le navigateur. `PORT` règle le port de l’API,
 `VITE_PORT` celui de Vite si les ports habituels sont occupés ou réservés.

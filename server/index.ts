@@ -82,6 +82,6 @@ if (import.meta.main) {
   const shutdown = () => { app.close().catch(error => { app.log.error(error); process.exitCode = 1; }); };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-  try { await app.listen({ port: Number(process.env.PORT ?? 3000), host: '127.0.0.1' }); }
+  try { await app.listen({ port: Number(process.env.PORT ?? 3210), host: '127.0.0.1' }); }
   catch (error) { app.log.error(error); await app.close(); process.exitCode = 1; }
 }

@@ -7,8 +7,8 @@ export default defineConfig({
     host: '127.0.0.1',
     port: Number(process.env.VITE_PORT ?? 4200),
     proxy: {
-      '/api': `http://127.0.0.1:${process.env.PORT ?? 3000}`,
-      '/posters': `http://127.0.0.1:${process.env.PORT ?? 3000}`,
+      '/api/': `http://127.0.0.1:${process.env.PORT ?? 3210}`,
+      '/posters/': `http://127.0.0.1:${process.env.PORT ?? 3210}`,
     },
   },
 });

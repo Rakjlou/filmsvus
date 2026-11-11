@@ -14,7 +14,7 @@ async function close(code = 0) {
 process.once('SIGINT', () => void close());
 process.once('SIGTERM', () => void close());
 try {
-  await api.listen({ host: '127.0.0.1', port: Number(process.env.PORT ?? 3000) });
+  await api.listen({ host: '127.0.0.1', port: Number(process.env.PORT ?? 3210) });
   await vite.listen();
   vite.printUrls();
 } catch (error) { console.error(error); await close(1); }

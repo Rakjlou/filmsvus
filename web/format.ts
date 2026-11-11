@@ -12,3 +12,9 @@ export function scoreTone(score: number | null | undefined) {
   return score == null ? 'unrated' : score < 0 ? 'negative' : score < 5 ? 'low' : score < 7 ? 'neutral' : score < 9 ? 'good' : 'gold';
 }
 export const safeUrl = (url: string | null | undefined) => url && /^https?:\/\//i.test(url) ? url : undefined;
+
+export function posterInitials(title: string) {
+  return (title.match(/[\p{L}\p{N}]+/gu) ?? [])
+    .filter(word => /\p{L}/u.test(word)).slice(0, 2)
+    .map(word => [...word][0]).join('').toUpperCase() || 'FV';
+}

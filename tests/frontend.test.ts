@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import { FilmsRepo } from '../server/repo/films.ts';
 import { tempDb } from './helpers.ts';
 import { selectFilms, sorts } from '../web/listState.ts';
+import { posterInitials } from '../web/format.ts';
+import { stepRating } from '../web/rating.ts';
+
+test('affiches : initiales sans ponctuation, parenthèses ni mots purement numériques', () => {
+  for (const [title, expected] of [
+    ['Malveillante (Other Mommy)', 'MO'], ['[Été] — à Paris', 'ÉÀ'],
+    ['... 123 (45) Blade Runner 2049', 'BR'], ['District 9', 'D'],
+    ['B2 Plan', 'BP'], ['1917', 'FV'], [' ( [] ) — ', 'FV'], ['', 'FV'],
+  ] as const) assert.equal(posterInitials(title), expected, title);
+});
+
+test('notes : premier pas à 5 dans les deux sens, demi-points, zéro et bornes préservés', () => {
+  assert.equal(stepRating(null, 1), 5);
+  assert.equal(stepRating(null, -1), 5);
+  assert.equal(stepRating(5, 1), 5.5);
+  assert.equal(stepRating(5, -1), 4.5);
+  assert.equal(stepRating(0, -1), -.5);
+  assert.equal(stepRating(-10, -1), -10);
+  assert.equal(stepRating(10, 1), 10);
+});
 
 test('liste : recherche accent-insensible dans les souvenirs et le générique, filtres combinés, année Paris', t => {
   const repo = new FilmsRepo(tempDb(t));
