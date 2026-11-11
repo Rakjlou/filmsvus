@@ -5,4 +5,3 @@ data/*.db*
 data/posters/
 data/source/
 coverage/
-.npm-cache/
