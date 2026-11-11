@@ -90,8 +90,9 @@ test('API : schémas JSON, références, conflits, IMDb invalide et mise à jour
 test('API recherche/budget/hydratation : fetch simulé, cache, quota HTTP 429, revue manuelle', async t => {
   const db = tempDb(t); let calls = 0;
   const fetch: typeof globalThis.fetch = async input => {
-    calls++;
     const url = new URL(String(input));
+    if (url.hostname === 'www.wikidata.org') return json({ search: [] });
+    calls++;
     if (url.searchParams.has('s')) return json({ Response: 'True', Search: [{ Title: 'Film', imdbID: 'tt1234567' }] });
     return json({ Response: 'False', Error: 'Movie not found!' });
   };
@@ -127,7 +128,10 @@ test('changement IMDb : métadonnées et hydratation invalidées, souvenirs et c
 test('API ajout : hydratation en arrière-plan et attente propre à la fermeture', async t => {
   const db = tempDb(t); let calls = 0;
   const app = buildApp({ db, apiKey: 'test', throttleMs: 0, postersDir: tempDir(t),
-    fetch: async () => { calls++; return json({ Response: 'False', Error: 'Movie not found!' }); } });
+    fetch: async input => {
+      if (new URL(String(input)).hostname === 'www.wikidata.org') return json({ search: [] });
+      calls++; return json({ Response: 'False', Error: 'Movie not found!' });
+    } });
   const response = await app.inject({ method: 'POST', url: '/api/films', payload: { title: 'Introuvable' } });
   assert.equal(response.statusCode, 201);
   await app.close();

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import type { Candidate, Film, Role, SearchResponse, Viewer } from '../types.ts';
+import type { WikidataCandidate } from '../../server/services/wikidata.ts';
 import { api, json, message, useResource } from '../api.ts';
 import { date, number, safeUrl } from '../format.ts';
 import { Poster } from '../components/Poster.tsx';
@@ -35,6 +36,21 @@ export function FilmPage() {
   ].filter(metric => metric.value !== null) : [];
   const hasExternalInfo = film && (externalScores.length > 0 || film.awards || film.box_office || film.languages.length > 0 || film.imdb_id || safeUrl(film.letterboxd_url));
   useEffect(() => { if (film) document.title = `${film.title} · Films vus`; }, [film]);
+  useEffect(() => {
+    if (!film?.needs_review || busy) return;
+    const controller = new AbortController();
+    const saved = film.wikidata_raw ? (JSON.parse(film.wikidata_raw) as { searchCandidates?: WikidataCandidate[] }).searchCandidates ?? [] : [];
+    const stored: Candidate[] = saved.map(c => ({ imdbID: c.imdbID,
+      title: c.titleFr ?? c.originalTitle ?? c.titleEn ?? c.imdbID, originalTitle: c.originalTitle,
+      englishTitle: c.titleEn, year: c.year, directors: c.directors, poster: null, source: 'wikidata' }));
+    setCandidates(stored.length ? stored : undefined);
+    void api<SearchResponse>(`/search?q=${encodeURIComponent(film.title.slice(0, 200))}`, { signal: controller.signal }).then(response => {
+      const found = response.Search ?? [];
+      // Keep the batch's ranked suggestions visible, including titles with a year hint.
+      setCandidates([...stored, ...found.filter(c => !stored.some(s => s.imdbID === c.imdbID))]);
+    }).catch(error => { if (!controller.signal.aborted) setError(message(error)); });
+    return () => controller.abort();
+  }, [film?.id, film?.title, film?.needs_review, film?.wikidata_raw, busy]);
   // New entries are hydrated by the API. Poll only local data, never OMDb.
   useEffect(() => {
     if (!routeState?.added || !film || film.hydrated || film.needs_review || editing) return;
@@ -57,8 +73,6 @@ export function FilmPage() {
       resource.setData(updated);
       if (updated.needs_review) {
         setNotice('Plusieurs films peuvent correspondre. Choisissez le bon ci-dessous.');
-        const results = await api<SearchResponse>(`/search?q=${encodeURIComponent(updated.title.slice(0, 200))}`);
-        setCandidates(results.Search ?? []);
       } else setNotice('Les informations du film sont à jour.');
     } catch (error) { setError(message(error)); resource.reload(); } finally { setBusy(false); }
   }

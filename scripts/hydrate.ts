@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { openDatabase } from '../server/db/index.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
 import { OmdbClient, BudgetExceeded } from '../server/services/omdb.ts';
-import { WikidataClient } from '../server/services/wikidata.ts';
+import { WikidataClient, WikidataUnavailable } from '../server/services/wikidata.ts';
 import { Hydrator } from '../server/services/hydrate.ts';
 import { createThrottle } from '../server/services/network.ts';
 
@@ -29,7 +29,7 @@ export async function main(args = process.argv.slice(2)) {
       for (const film of films) console.log(`${film.id} : ${film.title}`);
       return;
     }
-    const throttle = createThrottle();
+    const throttle = createThrottle(1500);
     const omdb = new OmdbClient(db, { throttle });
     const hydrate = new Hydrator(repo, omdb, new WikidataClient(db, { throttle }));
     let stop = false, hydrated = 0, review = 0, failed = 0;
@@ -44,6 +44,7 @@ export async function main(args = process.argv.slice(2)) {
           console.log(`${film.id} : ${result.hydrated ? 'enrichi' : 'à vérifier'}`);
         } catch (error) {
           if (error instanceof BudgetExceeded) { console.log('Budget OMDb atteint, arrêt propre.'); break; }
+          if (error instanceof WikidataUnavailable) { console.log('Wikidata indisponible, arrêt propre. Relancez l’hydratation plus tard.'); break; }
           failed++;
           console.error(`${film.id} : ${error instanceof Error ? error.message : String(error)}`);
         }

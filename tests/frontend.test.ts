@@ -5,6 +5,8 @@ import { tempDb } from './helpers.ts';
 import { selectFilms, sorts } from '../web/listState.ts';
 import { posterInitials } from '../web/format.ts';
 import { stepRating } from '../web/rating.ts';
+import { candidateSelection, normalizeCandidate } from '../web/search.ts';
+import { dansMaPeau, knivesOut } from './fixtures/wikidata.ts';
 
 test('affiches : initiales sans ponctuation, parenthèses ni mots purement numériques', () => {
   for (const [title, expected] of [
@@ -24,15 +26,26 @@ test('notes : premier pas à 5 dans les deux sens, demi-points, zéro et bornes 
   assert.equal(stepRating(10, 1), 10);
 });
 
+test('candidats : compatibilité OMDb et sélection en français conservant la casse saisie', () => {
+  const legacy = normalizeCandidate({ imdbID: 'tt1234567', Title: 'Film', Year: '1999', Poster: 'N/A', Director: 'Alice, Bob' });
+  assert.equal(legacy.title, 'Film'); assert.equal(legacy.year, 1999); assert.equal(legacy.poster, null);
+  assert.deepEqual(legacy.directors, ['Alice', 'Bob']);
+  const candidate = { imdbID: dansMaPeau.imdbID, title: dansMaPeau.titleFr!, originalTitle: dansMaPeau.originalTitle,
+    englishTitle: dansMaPeau.titleEn, year: dansMaPeau.year, directors: dansMaPeau.directors, poster: null, source: 'wikidata' as const };
+  assert.equal(candidateSelection(candidate, ' DANS MA PEAU ').title, 'DANS MA PEAU');
+  assert.equal(candidateSelection(candidate, 'In My Skin').title, 'Dans ma peau');
+  assert.equal(candidateSelection({ ...candidate, title: knivesOut.titleFr! }, 'A Couteaux Tirés').title, 'À couteaux tirés');
+});
+
 test('liste : recherche accent-insensible dans les souvenirs et le générique, filtres combinés, année Paris', t => {
   const repo = new FilmsRepo(tempDb(t));
-  const film = repo.create({ title: 'Été', watched_at: '2025-12-31T23:30:00Z', director_text: 'Agnès Varda',
+  const film = repo.create({ title: 'Été', title_fr: 'Un été français', original_title: 'Summer in Paris', watched_at: '2025-12-31T23:30:00Z', director_text: 'Agnès Varda',
     summary: 'Une plage', comment: 'Mémorable', year: 1999, genres: ['Drame'], tag_ids: [1],
     credits: [{ role: 'composer', name: 'Éric Serra', position: 0, source: 'manual' }],
     ratings: [{ viewer_id: 1, score: -4 }, { viewer_id: 2, score: 6 }] });
   repo.create({ title: 'Autre', watched_at: '2025-01-01T00:00:00Z', hydrated_at: '2025-02-01T00:00:00Z' });
   const films = repo.list();
-  for (const q of ['ete', 'agnes', 'plage', 'memorable', 'eric']) assert.deepEqual(selectFilms(films, new URLSearchParams({ q })).map(f => f.id), [film.id]);
+  for (const q of ['ete', 'francais', 'summer', 'agnes', 'plage', 'memorable', 'eric']) assert.deepEqual(selectFilms(films, new URLSearchParams({ q })).map(f => f.id), [film.id]);
   const params = new URLSearchParams({ year: '2026', decade: '1990', tag: '1', genre: 'Drame', director: 'Agnès Varda', min: '1', max: '1', gap: '10', unhydrated: '1' });
   assert.deepEqual(selectFilms(films, params).map(f => f.id), [film.id]);
   params.set('min', '1.5'); assert.equal(selectFilms(films, params).length, 0);

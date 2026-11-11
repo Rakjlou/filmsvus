@@ -60,7 +60,7 @@ export function buildApp(options: AppOptions = {}) {
   tagRoutes(app, repo);
   viewerRoutes(app, repo);
   statsRoutes(app, repo);
-  searchRoutes(app, omdb);
+  searchRoutes(app, omdb, wikidata);
   mkdirSync(postersDir, { recursive: true });
   app.register(fastifyStatic, { root: postersDir, prefix: '/posters/', decorateReply: false, index: false });
   const distDir = resolve(options.distDir ?? 'dist');
