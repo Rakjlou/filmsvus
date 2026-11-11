@@ -9,6 +9,8 @@ test('stats vides et corrélation dégénérée', t => {
   const stats = computeStats([], repo.viewers());
   assert.equal(stats.total, 0); assert.equal(stats.avg, null); assert.equal(stats.hydration_rate, 0);
   assert.equal(stats.imdb_correlation, null);
+  assert.deepEqual(stats.imdb_pairs, []);
+  assert.deepEqual(stats.viewers[0]!.rating_distribution, {});
   assert.equal(correlation([[1, 2]]), null);
   assert.equal(correlation([[1, 2], [1, 3]]), null);
   assert.equal(correlation([[1, 2], [2, 1]]), -1);
@@ -29,6 +31,10 @@ test('stats couple uniquement, invités, mois Paris, négatifs, genres/décennie
   assert.deepEqual(stats.films_by_month, { '2026-01': 2, '2026-02': 1 });
   assert.equal(stats.viewers[0]!.avg, 2); assert.equal(stats.viewers[1]!.avg, 3);
   assert.equal(stats.viewers[2]!.avg, -10);
+  assert.deepEqual(stats.viewers[0]!.rating_distribution, { '8': 1, '-4': 1 });
+  assert.deepEqual(stats.viewers[1]!.rating_distribution, { '6': 1, '0': 1 });
+  assert.deepEqual(stats.viewers[2]!.rating_distribution, { '-10': 1 });
+  assert.deepEqual(stats.imdb_pairs.map(p => [p.title, p.avg, p.imdb_rating]).sort(), [['A', 7, 9], ['B', -2, 3]]);
   assert.deepEqual(stats.rating_distribution, { '7': 1, '-2': 1 });
   assert.equal(stats.top[0]!.title, 'A'); assert.equal(stats.flop[0]!.title, 'B');
   assert.equal(stats.disagreements[0]!.gap, 4);

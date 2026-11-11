@@ -78,7 +78,7 @@ export function buildApp(options: AppOptions = {}) {
 }
 
 if (import.meta.main) {
-  const app = buildApp({ logger: true });
+  const app = buildApp({ logger: true, production: process.argv.includes('--production') || process.env.NODE_ENV === 'production' });
   const shutdown = () => { app.close().catch(error => { app.log.error(error); process.exitCode = 1; }); };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);

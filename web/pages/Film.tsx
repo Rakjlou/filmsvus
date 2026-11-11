@@ -1,0 +1,94 @@
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import type { Candidate, Film, Role, SearchResponse, Viewer } from '../types.ts';
+import { api, json, message, useResource } from '../api.ts';
+import { date, number, safeUrl } from '../format.ts';
+import { Poster } from '../components/Poster.tsx';
+import { Score } from '../components/FilmCard.tsx';
+import { FilmForm } from '../components/FilmForm.tsx';
+import { FilmSearch } from '../components/FilmSearch.tsx';
+import { TagPicker } from '../components/TagPicker.tsx';
+import { ErrorMessage, Loading } from '../components/Feedback.tsx';
+import { Icon } from '../components/Icon.tsx';
+
+const roles: [Role, string][] = [['director', 'Réalisation'], ['writer', 'Scénario'], ['composer', 'Musique'], ['cinematographer', 'Image'], ['editor', 'Montage'], ['producer', 'Production'], ['actor', 'Casting']];
+export function FilmPage() {
+  const { id } = useParams();
+  const resource = useResource<Film>(`/films/${id}`);
+  const viewers = useResource<Viewer[]>('/viewers');
+  const navigate = useNavigate(), location = useLocation();
+  const routeState = location.state as { returnTo?: string; added?: boolean } | null;
+  const [editing, setEditing] = useState(false), [tagEdit, setTagEdit] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [imdb, setImdb] = useState(''), [candidates, setCandidates] = useState<Candidate[]>();
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const film = resource.data;
+  useEffect(() => { if (film) document.title = `${film.title} · Films vus`; }, [film]);
+  // New entries are hydrated by the API. Poll only local data, never OMDb.
+  useEffect(() => {
+    if (!routeState?.added || !film || film.hydrated || film.needs_review || editing) return;
+    const controller = new AbortController();
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      if (++attempts >= 10) window.clearInterval(interval);
+      void api<Film>(`/films/${id}`, { signal: controller.signal }).then(updated => {
+        if (updated.hydrated || updated.needs_review) resource.setData(updated);
+      }).catch(() => { window.clearInterval(interval); });
+    }, 3000);
+    return () => { controller.abort(); window.clearInterval(interval); };
+  }, [id, routeState?.added, film?.hydrated, film?.needs_review, Boolean(film), editing, resource.setData]);
+  async function hydrate(candidateId?: string) {
+    if (!film) return;
+    setBusy(true); setError(''); setNotice(''); setCandidates(undefined);
+    try {
+      if (candidateId) resource.setData(await api<Film>(`/films/${id}`, json('PATCH', { imdb_id: candidateId })));
+      const updated = await api<Film>(`/films/${id}/hydrate`, json('POST'));
+      resource.setData(updated);
+      if (updated.needs_review) {
+        setNotice('Plusieurs films peuvent correspondre. Choisissez le bon ci-dessous.');
+        const results = await api<SearchResponse>(`/search?q=${encodeURIComponent(updated.title.slice(0, 200))}`);
+        setCandidates(results.Search ?? []);
+      } else setNotice('Les informations du film sont à jour.');
+    } catch (error) { setError(message(error)); resource.reload(); } finally { setBusy(false); }
+  }
+  async function updateTags(ids: number[]) {
+    setBusy(true); setError('');
+    try { resource.setData(await api<Film>(`/films/${id}/tags`, json('PUT', { tag_ids: ids }))); }
+    catch (error) { setError(message(error)); } finally { setBusy(false); }
+  }
+  async function remove() {
+    setBusy(true); setError('');
+    try { await api(`/films/${id}`, json('DELETE')); navigate(routeState?.returnTo ?? '/', { replace: true }); }
+    catch (error) { setError(message(error)); setBusy(false); }
+  }
+  return <>
+    <Link className="back-link" to={routeState?.returnTo ?? '/'}><Icon name="back" /> Retour à la collection</Link>
+    {resource.loading && <Loading />}{resource.error && <ErrorMessage retry={resource.reload}>{resource.error}</ErrorMessage>}
+    {film && <article className="film-detail">
+      <div className="detail-poster"><Poster title={film.title} src={film.poster_url} priority /><span className="poster-undertext">Une séance de Fleur & Noé</span></div>
+      <div className="detail-main"><header className="detail-heading"><p className="eyebrow">Vu le {date(film.watched_at)}</p><h1>{film.title}</h1>
+        {(film.title_fr || film.original_title) && <p className="alternate-titles">{[film.title_fr, film.original_title].filter((t, i, list) => t && t !== film.title && list.indexOf(t) === i).join(' · ')}</p>}
+        <p className="detail-director">{film.director_text || film.credits.filter(c => c.role === 'director').map(c => c.name).join(', ') || 'Réalisation à découvrir'}</p>
+        <p className="film-facts">{[film.year, film.runtime_min ? `${film.runtime_min} min` : null, ...film.genres, ...film.countries].filter(Boolean).join(' · ') || 'Les détails du film sont à enrichir.'}</p>
+      </header>
+      <div className="detail-actions"><button type="button" disabled={busy} onClick={() => setEditing(!editing)} aria-expanded={editing}><Icon name="edit" /> {editing ? 'Fermer l’édition' : 'Modifier'}</button><button className="primary" type="button" disabled={busy || film.hydrated || editing} onClick={() => void hydrate()}><Icon name="sparkle" /> {busy ? 'Un instant…' : film.hydrated ? 'Film enrichi' : 'Enrichir'}</button></div>
+      {error && <ErrorMessage>{error}</ErrorMessage>}{notice && <p className="notice" role="status">{notice}</p>}
+      {routeState?.added && !notice && <p className="notice" role="status">{film.hydrated ? 'Séance enregistrée et film enrichi.' : film.needs_review ? 'Séance enregistrée. Vérifiez le film IMDb pour compléter les informations.' : 'Séance enregistrée. L’enrichissement se poursuit en arrière-plan.'}</p>}
+      {editing ? <section className="surface edit-panel" aria-label="Modifier le film">{viewers.loading && <Loading />}{viewers.error && <ErrorMessage retry={viewers.reload}>{viewers.error}</ErrorMessage>}{viewers.data && <FilmForm film={film} viewers={viewers.data} onCancel={() => setEditing(false)} onSaved={updated => { resource.setData(updated); setEditing(false); setNotice('Vos modifications sont enregistrées.'); }} />}</section> : <>
+        <section className="ratings-panel" aria-label="Les notes"><div className="couple-rating"><span className="eyebrow">Notre moyenne</span><Score value={film.avg} /><span className="hint">Fleur & Noé</span></div><div className="individual-ratings">{film.ratings.filter(r => r.is_core || r.score !== null).map(r => <div key={r.id}><span>{r.name}{!r.is_core && <small> · invité</small>}</span><Score small value={r.score} /></div>)}<div className="derived-rating"><span>Letterboxd</span><span>{number(film.letterboxd_rating)} <small>/5</small></span></div><div className="derived-rating"><span>Écart F / N</span><span>{number(film.gap)} <small>pts</small></span></div></div></section>
+        <section className="detail-tags"><div className="section-heading"><h2>Souvenirs de séance</h2><button type="button" className="text-button" onClick={() => setTagEdit(!tagEdit)} disabled={busy} aria-expanded={tagEdit}>{tagEdit ? 'Terminer' : 'Modifier les tags'}</button></div>{tagEdit ? <TagPicker value={film.tags.map(t => t.id)} onChange={ids => void updateTags(ids)} disabled={busy} /> : <div className="chips">{film.tags.length ? film.tags.map(tag => <span className="tag-label" key={tag.id}>{tag.emoji} {tag.label}</span>) : <p className="hint">Les petits détails de cette séance restent à ajouter.</p>}</div>}</section>
+        <section className="prose-section"><p className="eyebrow">L’histoire</p><h2>Synopsis</h2><p className="preserve-lines">{film.summary || film.plot_en || 'Le résumé arrivera avec l’enrichissement. Vous pouvez aussi écrire le vôtre.'}</p>{!film.summary && film.plot_en && <p className="hint">Synopsis original fourni par OMDb.</p>}</section>
+        <section className="prose-section comment-section"><p className="eyebrow">Après la séance</p><h2>Notre commentaire</h2><p className="preserve-lines">{film.comment || 'Pas encore de commentaire. Qu’est-ce qu’on en garde ?'}</p></section>
+      </>}
+      <section className="enrichment-panel surface" aria-labelledby="enrichment-title"><div className="section-heading"><h2 id="enrichment-title">Le bon film, les bonnes infos</h2><span className={`status-pill ${film.hydrated ? 'complete' : ''}`}>{film.hydrated ? 'Enrichi' : film.needs_review ? 'À vérifier' : 'À enrichir'}</span></div>
+        <form className="imdb-form" onSubmit={e => { e.preventDefault(); void hydrate(imdb.trim()); }}><label>Coller une URL IMDb<input value={imdb} onChange={e => setImdb(e.target.value)} placeholder={film.imdb_id ?? 'https://www.imdb.com/title/tt…'} disabled={busy || editing} required pattern="(tt[0-9]{7,10}|https?://(www\.)?imdb\.com/title/tt[0-9]{7,10}(/.*)?)" /></label><button type="submit" disabled={busy || editing || !imdb.trim()}>Lier et enrichir</button></form>
+        {film.needs_review && !editing && <><p className="hint">Vérifiez le titre ou recherchez le titre original pour choisir la bonne affiche.</p><FilmSearch key={film.id} initialQuery={film.title} initialResults={candidates} onSelect={candidate => void hydrate(candidate.imdbID)} disabled={busy} /></>}
+      </section>
+    </div>
+    <div className="detail-extras"><section className="surface"><p className="eyebrow">Derrière la caméra</p><h2>Le générique</h2><dl className="credits-list">{roles.map(([role, label]) => { const names = film.credits.filter(c => c.role === role).map(c => c.name); return <div key={role}><dt>{label}</dt><dd>{names.join(', ') || (role === 'director' ? film.director_text : null) || 'À découvrir'}</dd></div>; })}<div><dt>Sociétés de production</dt><dd>{film.companies.map(c => c.name).join(', ') || 'À découvrir'}</dd></div></dl></section>
+      <section className="surface"><p className="eyebrow">Les autres regards</p><h2>Au-delà de notre canapé</h2><div className="external-scores"><div><span>IMDb</span><b>{number(film.imdb_rating)}<small>/10</small></b></div><div><span>Metascore</span><b>{number(film.metascore)}<small>/100</small></b></div><div><span>Rotten Tomatoes</span><b>{number(film.rt_score)}<small>%</small></b></div></div><dl className="credits-list"><div><dt>Récompenses</dt><dd>{film.awards || 'Non renseignées'}</dd></div><div><dt>Box-office</dt><dd>{film.box_office || 'Non renseigné'}</dd></div>{film.languages.length > 0 && <div><dt>Langues</dt><dd>{film.languages.join(', ')}</dd></div>}</dl><div className="external-links">{film.imdb_id && <a className="button" href={`https://www.imdb.com/title/${film.imdb_id}/`} target="_blank" rel="noopener noreferrer">IMDb <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}{safeUrl(film.letterboxd_url) && <a className="button" href={safeUrl(film.letterboxd_url)} target="_blank" rel="noopener noreferrer">Letterboxd <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}</div></section>
+    </div>
+    <div className="delete-area">{confirmDelete ? <section className="delete-confirm" aria-labelledby="delete-title"><h2 id="delete-title">Supprimer « {film.title} » ?</h2><p>Les notes, tags et souvenirs de cette séance seront supprimés.</p><div className="form-actions"><button type="button" autoFocus disabled={busy} onClick={() => { setConfirmDelete(false); window.requestAnimationFrame(() => deleteButton.current?.focus()); }}>Garder le film</button><button className="danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Suppression…' : 'Supprimer définitivement'}</button></div></section> : <button ref={deleteButton} type="button" className="text-button danger-text" disabled={busy || editing} onClick={() => setConfirmDelete(true)}>Supprimer cette séance</button>}</div>
+    </article>}
+  </>;
+}

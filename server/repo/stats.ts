@@ -47,7 +47,12 @@ export function computeStats(films: Film[], viewers: Viewer[]) {
     avg: mean(rated.map(f => f.avg!)),
     viewers: viewers.map(v => {
       const scores = films.flatMap(f => f.ratings.filter(r => r.id === v.id && r.score !== null).map(r => r.score!));
-      return { ...v, count: scores.length, avg: mean(scores) };
+      const distribution: Record<string, number> = {};
+      for (const score of scores) {
+        const bin = String(Math.floor(score));
+        distribution[bin] = (distribution[bin] ?? 0) + 1;
+      }
+      return { ...v, count: scores.length, avg: mean(scores), rating_distribution: distribution };
     }),
     rating_distribution: histogram,
     disagreements: films.filter(f => f.gap !== null).sort((a, b) => b.gap! - a.gap!).slice(0, 10).map(rank),
@@ -55,6 +60,8 @@ export function computeStats(films: Film[], viewers: Viewer[]) {
     flop: [...rated].sort((a, b) => a.avg! - b.avg!).slice(0, 10).map(rank),
     directors: aggregates(groups.directors), genres: aggregates(groups.genres), decades: aggregates(groups.decades),
     imdb_correlation: correlation(films.flatMap(f => f.avg !== null && f.imdb_rating !== null ? [[f.avg, f.imdb_rating] as [number, number]] : [])),
+    imdb_pairs: films.flatMap(f => f.avg !== null && f.imdb_rating !== null
+      ? [{ id: f.id, title: f.title, avg: f.avg, imdb_rating: f.imdb_rating }] : []),
     hydrated, hydration_rate: films.length ? hydrated / films.length : 0,
   };
 }
