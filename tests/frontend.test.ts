@@ -5,8 +5,30 @@ import { tempDb } from './helpers.ts';
 import { selectFilms, sorts } from '../web/listState.ts';
 import { posterInitials } from '../web/format.ts';
 import { stepRating } from '../web/rating.ts';
+import { displayTitles } from '../web/titles.ts';
 import { candidateSelection, normalizeCandidate } from '../web/search.ts';
 import { dansMaPeau, knivesOut } from './fixtures/wikidata.ts';
+
+test('titres affichés : original latin, français discret, original non latin et normalisation', () => {
+  for (const [film, expected] of [
+    [{ title: 'An Ordinary Case', title_fr: 'Le Fil', original_title: 'Le Fil' }, { main: 'Le Fil', secondary: null }],
+    [{ title: 'Dans ma peau', title_fr: 'Dans ma peau', original_title: 'In My Skin' }, { main: 'In My Skin', secondary: 'Dans ma peau' }],
+    [{ title: 'Parasite', title_fr: 'Parasite', original_title: '기생충' }, { main: 'Parasite', secondary: '기생충' }],
+    [{ title: 'Titre seul' }, { main: 'Titre seul', secondary: null }],
+    [{ title: 'Another English title', title_fr: 'À couteaux-tirés !', original_title: 'A COUTEAUX TIRES' }, { main: 'A COUTEAUX TIRES', secondary: null }],
+    [{ title: 'Film anglais', title_fr: 'Film français', original_title: 'Фильм' }, { main: 'Film français', secondary: 'Фильм' }],
+    [{ title: 'Autre titre', original_title: 'Original' }, { main: 'Original', secondary: 'Autre titre' }],
+  ] as const) assert.deepEqual(displayTitles(film), expected);
+});
+
+test('tri des titres : utilise le titre affiché et recherche toujours les trois titres', t => {
+  const repo = new FilmsRepo(tempDb(t));
+  const first = repo.create({ title: 'Zulu', original_title: 'Alpha', title_fr: 'Premier' });
+  const second = repo.create({ title: 'Bravo', original_title: '기생충', title_fr: 'Parasite' });
+  assert.deepEqual(selectFilms(repo.list(), new URLSearchParams('sort=title&dir=asc')).map(f => f.id), [first.id, second.id]);
+  assert.deepEqual(selectFilms(repo.list(), new URLSearchParams('sort=title&dir=desc')).map(f => f.id), [second.id, first.id]);
+  for (const q of ['Zulu', 'Alpha', 'Premier']) assert.deepEqual(selectFilms(repo.list(), new URLSearchParams({ q })).map(f => f.id), [first.id]);
+});
 
 test('affiches : initiales sans ponctuation, parenthèses ni mots purement numériques', () => {
   for (const [title, expected] of [
@@ -16,13 +38,13 @@ test('affiches : initiales sans ponctuation, parenthèses ni mots purement numé
   ] as const) assert.equal(posterInitials(title), expected, title);
 });
 
-test('notes : premier pas à 5 dans les deux sens, demi-points, zéro et bornes préservés', () => {
+test('notes : premier pas à 5 dans les deux sens, points entiers, zéro et bornes préservés', () => {
   assert.equal(stepRating(null, 1), 5);
   assert.equal(stepRating(null, -1), 5);
-  assert.equal(stepRating(5, 1), 5.5);
-  assert.equal(stepRating(5, -1), 4.5);
-  assert.equal(stepRating(0, -1), -.5);
-  assert.equal(stepRating(-10, -1), -10);
+  assert.equal(stepRating(5, 1), 6);
+  assert.equal(stepRating(5, -1), 4);
+  assert.equal(stepRating(0, -1), 0);
+  assert.equal(stepRating(0, 1), 1);
   assert.equal(stepRating(10, 1), 10);
 });
 
@@ -42,22 +64,22 @@ test('liste : recherche accent-insensible dans les souvenirs et le générique, 
   const film = repo.create({ title: 'Été', title_fr: 'Un été français', original_title: 'Summer in Paris', watched_at: '2025-12-31T23:30:00Z', director_text: 'Agnès Varda',
     summary: 'Une plage', comment: 'Mémorable', year: 1999, genres: ['Drame'], tag_ids: [1],
     credits: [{ role: 'composer', name: 'Éric Serra', position: 0, source: 'manual' }],
-    ratings: [{ viewer_id: 1, score: -4 }, { viewer_id: 2, score: 6 }] });
+    ratings: [{ viewer_id: 1, score: 0 }, { viewer_id: 2, score: 6 }] });
   repo.create({ title: 'Autre', watched_at: '2025-01-01T00:00:00Z', hydrated_at: '2025-02-01T00:00:00Z' });
   const films = repo.list();
   for (const q of ['ete', 'francais', 'summer', 'agnes', 'plage', 'memorable', 'eric']) assert.deepEqual(selectFilms(films, new URLSearchParams({ q })).map(f => f.id), [film.id]);
-  const params = new URLSearchParams({ year: '2026', decade: '1990', tag: '1', genre: 'Drame', director: 'Agnès Varda', min: '1', max: '1', gap: '10', unhydrated: '1' });
+  const params = new URLSearchParams({ year: '2026', decade: '1990', tag: '1', genre: 'Drame', director: 'Agnès Varda', min: '3', max: '3', gap: '6', unhydrated: '1' });
   assert.deepEqual(selectFilms(films, params).map(f => f.id), [film.id]);
-  params.set('min', '1.5'); assert.equal(selectFilms(films, params).length, 0);
+  params.set('min', '3.5'); assert.equal(selectFilms(films, params).length, 0);
   assert.equal(selectFilms(films, new URLSearchParams('unrated=1')).length, 1);
   assert.equal(selectFilms(films, new URLSearchParams('max=-1')).length, 0);
   assert.equal(selectFilms(films, new URLSearchParams('gap=11')).length, 0);
 });
 
-test('liste : tous les tris, notes négatives, absences en dernier dans les deux sens, entrée préservée', t => {
+test('liste : tous les tris, notes entières, absences en dernier dans les deux sens, entrée préservée', t => {
   const repo = new FilmsRepo(tempDb(t));
   const first = repo.create({ title: 'A', watched_at: '2024-01-01T00:00:00Z', director_text: 'A', year: 1990,
-    runtime_min: 90, imdb_rating: 3, metascore: 20, ratings: [{ viewer_id: 1, score: -4 }, { viewer_id: 2, score: -2 }] });
+    runtime_min: 90, imdb_rating: 3, metascore: 20, ratings: [{ viewer_id: 1, score: 0 }, { viewer_id: 2, score: 2 }] });
   const second = repo.create({ title: 'B', watched_at: '2025-01-01T00:00:00Z', director_text: 'B', year: 2000,
     runtime_min: 120, imdb_rating: 8, metascore: 90, ratings: [{ viewer_id: 1, score: 4 }, { viewer_id: 2, score: 8 }] });
   repo.db.prepare('UPDATE films SET created_at=? WHERE id=?').run('2024-01-01T00:00:00Z', first.id);

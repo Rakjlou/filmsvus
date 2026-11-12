@@ -1,0 +1,59 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { migrate, openDatabase } from '../server/db/index.ts';
+
+function legacyDatabase() {
+  const db = new DatabaseSync(':memory:');
+  db.exec('PRAGMA foreign_keys=ON');
+  // schema.sql deliberately remains the v1 bootstrap; all new DBs run v2 too.
+  db.exec(readFileSync(new URL('../server/db/schema.sql', import.meta.url), 'utf8'));
+  db.exec(`PRAGMA user_version=1;
+    INSERT INTO viewers(id,name,is_core) VALUES (3,'Etienne',0);
+    INSERT INTO films(id,title,watched_at,letterboxd_url,summary,comment)
+      VALUES (1,'Film historique','2026-01-01T12:00:00Z','https://letterboxd.com/film/test/','Résumé','Souvenir');
+    INSERT INTO films(id,title,watched_at) VALUES (2,'Autre film','2026-01-02T12:00:00Z');
+    INSERT INTO ratings VALUES (1,1,-3),(1,2,7.5),(1,3,9),(2,1,NULL),(2,2,6.4);
+    INSERT INTO film_tags VALUES (1,1);
+    INSERT INTO credits VALUES (1,'director','Réalisatrice',0,'manual');`);
+  return db;
+}
+const schema = (db: DatabaseSync) => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all();
+
+test('migration v1 → v2 : nettoyage, scores entiers, souvenirs conservés et schéma identique à une base neuve', t => {
+  const db = legacyDatabase(), fresh = openDatabase(':memory:');
+  t.after(() => { db.close(); fresh.close(); });
+  migrate(db);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 2);
+  assert.deepEqual(db.prepare('SELECT name FROM viewers ORDER BY id').all().map(row => row.name), ['Fleur', 'Noé']);
+  assert.deepEqual(db.prepare('SELECT film_id,viewer_id,score FROM ratings ORDER BY film_id,viewer_id').all().map(row => [...Object.values(row)]),
+    [[1, 1, 0], [1, 2, 8], [2, 1, null], [2, 2, 6]]);
+  const columns = db.prepare('PRAGMA table_info(films)').all().map(row => row.name);
+  assert.ok(!columns.includes('letterboxd_url')); assert.ok(columns.includes('plot_fr'));
+  assert.equal(db.prepare('SELECT plot_fr FROM films WHERE id=1').get()!.plot_fr, null);
+  assert.equal(db.prepare('SELECT summary,comment FROM films WHERE id=1').get()!.comment, 'Souvenir');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM film_tags').get()!.n, 1);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM credits').get()!.n, 1);
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  for (const score of [-1, 11, 7.5]) assert.throws(() => db.prepare('INSERT OR REPLACE INTO ratings VALUES (1,1,?)').run(score), /CHECK/);
+  for (const score of [0, 10, null]) db.prepare('INSERT OR REPLACE INTO ratings VALUES (1,1,?)').run(score);
+  assert.deepEqual(schema(db), schema(fresh));
+  assert.equal(fresh.prepare('PRAGMA user_version').get()!.user_version, 2);
+  assert.deepEqual(fresh.prepare('SELECT name FROM viewers ORDER BY id').all().map(row => row.name), ['Fleur', 'Noé']);
+  fresh.exec("INSERT INTO films(id,title,watched_at) VALUES (1,'Neuf','2026-01-01T00:00:00Z')");
+  for (const score of [-1, 11, 7.5]) assert.throws(() => fresh.prepare('INSERT INTO ratings VALUES (1,1,?)').run(score), /CHECK/);
+  const before = schema(db); migrate(db); assert.deepEqual(schema(db), before);
+});
+
+test('migration v2 atomique et versions futures refusées', t => {
+  const db = legacyDatabase(); t.after(() => db.close());
+  db.exec("CREATE TRIGGER prevent_viewer_delete BEFORE DELETE ON viewers BEGIN SELECT RAISE(ABORT,'blocked'); END");
+  assert.throws(() => migrate(db), /blocked/);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 1);
+  assert.equal(db.prepare('SELECT score FROM ratings WHERE viewer_id=3').get()!.score, 9);
+  assert.equal(db.prepare('SELECT score FROM ratings WHERE viewer_id=1 AND film_id=1').get()!.score, -3);
+  db.exec('DROP TRIGGER prevent_viewer_delete; PRAGMA user_version=3');
+  const before = schema(db);
+  assert.throws(() => migrate(db), /non prise en charge/); assert.deepEqual(schema(db), before);
+});

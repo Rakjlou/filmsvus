@@ -6,7 +6,7 @@ export const ratingsBody = {
   type: 'object', required: ['ratings'], additionalProperties: false,
   properties: { ratings: { type: 'array', maxItems: 100, items: {
     type: 'object', required: ['viewer_id', 'score'], additionalProperties: false,
-    properties: { viewer_id: positiveId, score: { type: ['number', 'null'], minimum: -10, maximum: 10 } },
+    properties: { viewer_id: positiveId, score: { type: ['integer', 'null'], minimum: 0, maximum: 10 } },
   } } },
 };
 export const tagsBody = { type: 'object', required: ['tag_ids'], additionalProperties: false,
@@ -30,7 +30,6 @@ const filmProperties = {
   watched_at: { type: 'string', format: 'date-time' },
   director_text: nullableText, summary: nullableText, comment: nullableText,
   imdb_id: { type: ['string', 'null'], maxLength: 500 },
-  letterboxd_url: { anyOf: [{ type: 'string', pattern: '^https?://', format: 'uri', maxLength: 2000 }, { type: 'null' }] },
   runtime_min: { type: ['integer', 'null'], minimum: 0, maximum: 100_000 },
   genres: strings, countries: strings, languages: strings,
   ...ratingsBody.properties, ...tagsBody.properties,

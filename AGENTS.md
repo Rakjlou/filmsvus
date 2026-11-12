@@ -51,7 +51,8 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 
 ## Données
 
-- **391 films**, dont 5 notes « invité » (Etienne). Notes sur 10, **négatives possibles** ; `-` correspond à `null`. La moyenne et l'écart ne portent que sur les spectateurs `is_core` (Fleur, Noé). Le /5 « Letterboxd » vaut la moyenne divisée par 2, arrondie au demi-point.
+- **392 films**. Notes **entières de 0 à 10** (Fleur, Noé), `-` correspond à `null` ; seule la moyenne du couple peut tomber sur un demi-point. Plus d'invités ni de Letterboxd dans l'outil (retirés le 12/11/2026 à la demande du propriétaire, migration v2 ; ces données restent dans le classeur source). Sauvegarde d'avant migration : `data/films.db.bak-20261112-avant-retours`.
+- **Titres** : on affiche le titre original (Wikidata P1476) en gros et le titre français en petit s'il diffère ; si l'original n'a pas de lettre latine, c'est l'inverse. Le `Title` d'OMDb est le titre **anglais**, jamais l'original.
 - **Tags purement cosmétiques**, par exemple `😭 +1` (« on a pleuré ») : ils n'entrent jamais dans un calcul.
 - Dates Excel interprétées en Europe/Paris, stockées en UTC ISO.
 - Hors git : `.env`, `data/films.db*`, `data/posters/`, `data/source/`, `dist/`. **Le repo n'a pas de remote** : la base n'existe que localement, le propriétaire en fait des copies lui-même.
@@ -59,14 +60,14 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 
 ## Enrichissement (OMDb + Wikidata)
 
-- **OMDb** (compte gratuit, 1000 req/jour) fournit les détails, les notes IMDb/Metascore/RT et l'affiche. Le budget est appliqué côté serveur (`OMDB_DAILY_BUDGET`, 900 par défaut), compté dans `api_log`. Les réponses sont mises en cache : une requête déjà faite ne coûte plus rien. Au 12/11/2026, environ 8 requêtes consommées.
+- **OMDb** (compte gratuit, 1000 req/jour) fournit les détails, les notes IMDb/Metascore/RT et l'affiche. Le budget est appliqué côté serveur (`OMDB_DAILY_BUDGET`, 900 par défaut), compté dans `api_log`. Les réponses sont mises en cache : une requête déjà faite ne coûte plus rien. Une hydratation coûte **1 seule requête OMDb** par film (par ID IMDb) ; `--refresh` re-hydrate des films déjà enrichis sans quota (cache).
 - **Wikidata** (gratuit, sans clé) sert à deux choses :
   - la **recherche multilingue** (`/api/search`) : `wbsearchentities` en fr et en en, puis `wbgetentities`, en ne gardant que les éléments avec un ID IMDb `P345` en `tt…`. OMDb ne sert qu'en secours ou si on le force avec `?source=omdb`. OMDb ne connaît que les titres anglais, d'où ce choix ;
   - le **générique étendu**, via SPARQL : compositeur, chef op, monteur, producteurs, sociétés, titre original. La couverture est partielle (sociétés de production souvent absentes).
 - **Résolution automatique** d'un film importé : recherche Wikidata sur le titre du tableur, scoring sur le titre, le réalisateur (colonne « Real ») et l'année (≤ année de visionnage). Si c'est ambigu, le film passe en `needs_review` et la fiche propose les candidats.
 - **Wikidata limite le débit (429)** : on réessaie en respectant `Retry-After`, avec 1,5 s entre deux appels en lot. Si Wikidata échoue, l'hydratation s'arrête (erreur retryable) **sans se rabattre sur OMDb**, pour ne pas brûler le quota.
 - Les affiches sont téléchargées dans `data/posters/<imdbId>.jpg`, ce qui ne consomme pas de quota.
-- **État au 12/11/2026** : 4 films enrichis sur 392. La passe complète reste à faire, par lots (`--limit 50`), à la demande du propriétaire.
+- **Synopsis FR** : section « Synopsis/Résumé/Intrigue… » de l'article Wikipédia FR (lien via Wikidata), stockée dans `plot_fr`, cache `api_log` provider `wikipedia`. Best effort : un échec n'interrompt jamais l'hydratation. Priorité d'affichage : résumé perso > `plot_fr` > `plot_en`.
 
 ## Secrets
 

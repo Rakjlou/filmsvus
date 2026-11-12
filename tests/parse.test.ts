@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cachedValue, excelCellValue, parseText, parseTitle, parseScore, parseExcelDate, ratingMetrics, parseLetterboxd } from '../server/import/parse.ts';
+import { cachedValue, excelCellValue, parseText, parseTitle, parseScore, parseExcelDate, ratingMetrics } from '../server/import/parse.ts';
 
 test('valeurs Excel : formules mises en cache, zéro, rich text et titres numériques', () => {
   assert.equal(cachedValue({ formula: '1-1', result: 0 }), 0);
@@ -18,10 +18,10 @@ test('valeurs Excel : formules mises en cache, zéro, rich text et titres numér
 
 test('notes : absences, notes négatives, décimales et bornes', () => {
   for (const value of [null, undefined, '', '-', ' - ']) assert.equal(parseScore(value), null);
-  for (const value of [-10, -3, 0, 10, 7.75]) assert.equal(parseScore(value), value);
-  assert.equal(parseScore('7,5'), 7.5);
-  assert.equal(parseScore({ formula: '1-4', result: -3 }), -3);
-  for (const value of [-10.1, 10.1, 'bonjour', Infinity]) assert.throws(() => parseScore(value));
+  for (const value of [-100, -10, -3, 0, 10, 7.75]) assert.equal(parseScore(value), Math.round(Math.max(0, value)));
+  assert.equal(parseScore('7,5'), 8);
+  assert.equal(parseScore({ formula: '1-4', result: -3 }), 0);
+  for (const value of [10.1, 'bonjour', Infinity]) assert.throws(() => parseScore(value));
 });
 
 test('dates Excel : heure fractionnaire, hiver/été Paris, indépendante du fuseau système', () => {
@@ -35,18 +35,9 @@ test('dates Excel : heure fractionnaire, hiver/été Paris, indépendante du fus
   assert.throws(() => parseExcelDate('pas une date'));
 });
 
-test('calculs dérivés : absences, négatifs, moyenne, écart et arrondi /5', () => {
-  assert.deepEqual(ratingMetrics([7, 8]), { avg: 7.5, gap: 1, letterboxd_rating: 4 });
-  assert.deepEqual(ratingMetrics([null, 8]), { avg: 8, gap: null, letterboxd_rating: 4 });
-  assert.deepEqual(ratingMetrics([null, null]), { avg: null, gap: null, letterboxd_rating: null });
-  assert.deepEqual(ratingMetrics([-10, -3]), { avg: -6.5, gap: 7, letterboxd_rating: -3 });
-});
-
-test('colonne J : URL, hyperlien ou texte préservé dans le commentaire', () => {
-  assert.deepEqual(parseLetterboxd('https://letterboxd.com/film/1917/'), { url: 'https://letterboxd.com/film/1917/', comment: null });
-  assert.equal(parseLetterboxd({ text: 'Ouvrir', hyperlink: 'https://letterboxd.com/film/1917/' }).url, 'https://letterboxd.com/film/1917/');
-  assert.equal(parseLetterboxd({ formula: 'X1', result: 'https://letterboxd.com/' }).url, 'https://letterboxd.com/');
-  assert.deepEqual(parseLetterboxd('pas de lien'), { url: null, comment: 'Letterboxd : pas de lien' });
-  assert.equal(parseLetterboxd('javascript:alert(1)').url, null);
-  assert.deepEqual(parseLetterboxd(null), { url: null, comment: null });
+test('calculs dérivés : absences, moyenne au demi-point et écart', () => {
+  assert.deepEqual(ratingMetrics([7, 8]), { avg: 7.5, gap: 1 });
+  assert.deepEqual(ratingMetrics([null, 8]), { avg: 8, gap: null });
+  assert.deepEqual(ratingMetrics([null, null]), { avg: null, gap: null });
+  assert.deepEqual(ratingMetrics([0, 3]), { avg: 1.5, gap: 3 });
 });

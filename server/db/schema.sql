@@ -1,3 +1,4 @@
+-- v1 bootstrap: openDatabase always applies subsequent versioned migrations.
 CREATE TABLE films (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL CHECK(length(trim(title)) > 0),
@@ -56,6 +57,6 @@ CREATE TABLE api_log (
 CREATE INDEX api_log_budget ON api_log(provider, at);
 CREATE INDEX api_log_cache ON api_log(provider, request_key);
 CREATE INDEX ratings_viewer ON ratings(viewer_id);
-INSERT INTO viewers(name, is_core) VALUES ('Fleur', 1), ('Noé', 1), ('Etienne', 0);
+INSERT INTO viewers(name, is_core) VALUES ('Fleur', 1), ('Noé', 1);
 -- +1 😭 : on a pleuré (cosmétique, sans effet sur les notes).
 INSERT INTO tags(label, emoji, color) VALUES ('+1', '😭', '#8b5cf6');

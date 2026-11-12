@@ -9,7 +9,7 @@ export function watchedYear(value: string) {
   return new Intl.DateTimeFormat('fr-FR', { year: 'numeric', timeZone: 'Europe/Paris' }).format(new Date(value));
 }
 export function scoreTone(score: number | null | undefined) {
-  return score == null ? 'unrated' : score < 0 ? 'negative' : score < 5 ? 'low' : score < 7 ? 'neutral' : score < 9 ? 'good' : 'gold';
+  return score == null ? 'unrated' : score < 5 ? 'low' : score < 7 ? 'neutral' : score < 9 ? 'good' : 'gold';
 }
 export const safeUrl = (url: string | null | undefined) => url && /^https?:\/\//i.test(url) ? url : undefined;
 

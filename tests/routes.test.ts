@@ -6,26 +6,63 @@ import { tempDb, tempDir, offline, json } from './helpers.ts';
 import { buildApp } from '../server/index.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
 
-test('API films : CRUD, notes core/invité, tags, payload liste complet et cascade', async t => {
+test('API notes : rejette les valeurs hors bornes et décimales, accepte zéro, dix et absence', async t => {
+  const db = tempDb(t), repo = new FilmsRepo(db), film = repo.create({ title: 'Notes' });
+  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
+  t.after(() => app.close());
+  for (const score of [-1, 11, 6.5, 0, 10, null]) {
+    const ratings = [{ viewer_id: 1, score }], status = score === null || score === 0 || score === 10 ? 200 : 400;
+    for (const method of ['PUT', 'PATCH', 'POST'] as const) {
+      const url = method === 'POST' ? '/api/films' : `/api/films/${film.id}${method === 'PUT' ? '/ratings' : ''}`;
+      const payload = method === 'POST' ? { title: `Score ${score}`, ratings } : { ratings };
+      const response = await app.inject({ method, url, payload });
+      assert.equal(response.statusCode, method === 'POST' && status === 200 ? 201 : status, response.body);
+      if (status === 200) assert.equal(response.json().ratings[0].score, score);
+    }
+  }
+  repo.patch(film.id, { plot_fr: 'Une histoire française.' });
+  for (const url of ['/api/films', `/api/films/${film.id}`]) {
+    const response = (await app.inject(url)).json();
+    const films = Array.isArray(response) ? response : [response];
+    for (const entry of films) assert.ok(!Object.keys(entry).some(key => /letterboxd|guest_ratings/.test(key)));
+    assert.equal(films.find((entry: { id: number }) => entry.id === film.id).plot_fr, 'Une histoire française.');
+  }
+});
+
+test('API : spectateurs et notes limités aux core même avec une ligne non core résiduelle', async t => {
+  const db = tempDb(t), repo = new FilmsRepo(db);
+  const film = repo.create({ title: 'Core', ratings: [{ viewer_id: 1, score: 8 }, { viewer_id: 2, score: 7 }] });
+  db.exec("INSERT INTO viewers(id,name,is_core) VALUES (3,'Autre',0)");
+  db.prepare('INSERT INTO ratings VALUES (?,3,0)').run(film.id);
+  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
+  t.after(() => app.close());
+  assert.equal((await app.inject('/api/viewers')).json().length, 2);
+  const result = (await app.inject(`/api/films/${film.id}`)).json();
+  assert.equal(result.ratings.length, 2); assert.equal(result.avg, 7.5); assert.equal(result.gap, 1);
+  const stats = (await app.inject('/api/stats')).json();
+  assert.equal(stats.viewers.length, 2); assert.equal(stats.avg, 7.5);
+});
+
+test('API films : CRUD, notes du couple, tags, payload liste complet et cascade', async t => {
   const db = tempDb(t), repo = new FilmsRepo(db);
   const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
   t.after(() => app.close());
-  assert.equal((await app.inject('/api/viewers')).json().length, 3);
+  assert.equal((await app.inject('/api/viewers')).json().length, 2);
   assert.equal((await app.inject('/api/tags')).json()[0].label, '+1');
   const create = await app.inject({ method: 'POST', url: '/api/films', payload: {
     title: 'Mon film', watched_at: '2026-11-11T12:00:00Z', director_text: 'Réalisatrice',
     summary: 'Résumé', comment: 'Commentaire', genres: ['Drama'], year: 2000, runtime_min: 90,
-    letterboxd_url: 'https://letterboxd.com/film/test/',
     imdb_id: 'https://www.imdb.com/title/tt1234567/?ref_=abc',
-    ratings: [{ viewer_id: 1, score: 8 }, { viewer_id: 2, score: 5 }, { viewer_id: 3, score: -10 }],
+    ratings: [{ viewer_id: 1, score: 8 }, { viewer_id: 2, score: 5 }],
     tag_ids: [1], credits: [{ role: 'composer', name: 'Musicien', position: 0, source: 'manual' }],
   } });
   assert.equal(create.statusCode, 201, create.body);
   const film = create.json(), url = `/api/films/${film.id}`;
   assert.equal(create.headers.location, url);
   assert.equal(film.imdb_id, 'tt1234567'); assert.equal(film.avg, 6.5); assert.equal(film.gap, 3);
-  assert.equal(film.letterboxd_rating, 3.5); assert.equal(film.core_ratings.length, 2);
-  assert.equal(film.guest_ratings[0].score, -10); assert.equal(film.tags.length, 1);
+  assert.equal(film.core_ratings.length, 2); assert.equal(film.ratings.length, 2);
+  assert.ok(!Object.keys(film).some(key => /letterboxd|guest_ratings/.test(key)));
+  assert.equal(film.tags.length, 1); assert.equal(film.plot_fr, null);
   repo.patch(film.id, { imdb_rating: 8, poster_path: 'tt1234567.jpg', hydrated_at: '2026-11-11T13:00:00Z',
     omdb_raw: '{"private":"large"}', wikidata_raw: '{"private":"large"}' });
   const list = (await app.inject('/api/films')).json();
@@ -57,7 +94,6 @@ test('API : schémas JSON, références, conflits, IMDb invalide et mise à jour
   for (const payload of [{}, { title: '' }, { title: '  ' }, { title: 'X', unexpected: true },
     { title: 'X', watched_at: '2026-02-30' }, { title: 'X', year: 'nonsense' },
     { title: 'X', imdb_id: 'https://evil.example/title/tt1234567/' },
-    { title: 'X', letterboxd_url: 'javascript:alert(1)' },
     { title: 'X', ratings: [{ viewer_id: 1, score: 10.1 }] },
     { title: 'X', ratings: [{ viewer_id: 999, score: 3 }] },
     { title: 'X', tag_ids: [999] },
@@ -115,12 +151,13 @@ test('API recherche/budget/hydratation : fetch simulé, cache, quota HTTP 429, r
 test('changement IMDb : métadonnées et hydratation invalidées, souvenirs et crédits manuels préservés', async t => {
   const db = tempDb(t), repo = new FilmsRepo(db);
   const film = repo.create({ title: 'Film', imdb_id: 'tt1234567', summary: 'Souvenir', year: 1999,
-    hydrated_at: '2026-11-11T12:00:00Z', imdb_rating: 8, genres: ['Drama'],
+    hydrated_at: '2026-11-11T12:00:00Z', imdb_rating: 8, genres: ['Drama'], plot_fr: 'Ancien synopsis',
     credits: [{ role: 'director', name: 'Manuel', position: 0, source: 'manual' }, { role: 'writer', name: 'Auto', position: 0, source: 'omdb' }],
     companies: [{ name: 'Auto', source: 'wikidata' }] });
   const updated = repo.patch(film.id, { imdb_id: 'tt7654321' });
   assert.equal(updated.hydrated, false); assert.equal(updated.year, null);
   assert.equal(updated.imdb_rating, null); assert.deepEqual(updated.genres, []);
+  assert.equal(updated.plot_fr, null);
   assert.equal(updated.summary, 'Souvenir'); assert.equal(updated.credits.length, 1);
   assert.deepEqual(updated.companies, []);
 });

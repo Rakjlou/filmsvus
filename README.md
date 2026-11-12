@@ -43,11 +43,11 @@ Le frontend utilise React 19, React Router, Vite 8 et du CSS natif, avec quatre 
   commentaires et générique ; tous les tris et filtres sont dans l’URL et combinables.
   Les valeurs manquantes restent en fin de tri dans les deux sens. Les années de
   visionnage suivent Europe/Paris, comme les statistiques du serveur.
-- `/film/:id` : notes du couple et des invités, moyenne et écart, métadonnées et
+- `/film/:id` : notes du couple, moyenne et écart, métadonnées et
   générique ; édition, tags, enrichissement avec choix du candidat IMDb et
   suppression confirmée dans la page. Le retour conserve l’URL de la collection.
 - `/ajouter` : recherche OMDb sur soumission uniquement, lien IMDb ou saisie manuelle,
-  notes de −10 à 10 par demi-point, date, tags créables, résumé et commentaire.
+  notes entières de 0 à 10, date, tags créables, résumé et commentaire.
   L’API de recherche ne fournit que les candidats : le synopsis et le générique
   apparaissent après l’enrichissement serveur, sauf résumé renseigné manuellement.
   Après l’ajout, la fiche vérifie temporairement l’avancement avec des GET locaux.
@@ -66,14 +66,14 @@ et avec la préférence de réduction des animations.
 L’extension additive de `/api/stats` fournit `viewers[].rating_distribution` et
 `imdb_pairs` (`id`, `title`, `avg`, `imdb_rating`) ; les champs existants sont conservés.
 
-L'import conserve les annotations, les notes négatives et les absences (`-` → `null`).
-Les dates Excel sont interprétées en **Europe/Paris**, stockées en UTC ISO. Les notes
-calculées ignorent F/K/L et Etienne : moyenne des notes core disponibles, écart si
-les deux existent, moyenne /2 arrondie au demi-point. Le tag `+1 😭` signifie
-« on a pleuré » et n'intervient dans aucun calcul. Le texte non URL de J est ajouté
-au commentaire. Réimporter remet les champs issus du classeur à jour et conserve
-tags et enrichissement. Le classeur fourni contient **391 films**, **5 notes invité** ;
-les tests contrôlent ses **390 moyennes** où Fleur et Noé ont tous deux une note.
+L'import conserve les annotations et les absences (`-` → `null`), ramène les notes
+négatives à 0 et arrondit les scores au point le plus proche. Il lit uniquement
+les notes de Fleur et Noé ; les colonnes F et I à L sont ignorées. Les dates Excel
+sont interprétées en **Europe/Paris**, stockées en UTC ISO. La moyenne peut avoir
+un demi-point ; l'écart est calculé si les deux notes existent. Le tag `+1 😭`
+signifie « on a pleuré » et n'intervient dans aucun calcul. Réimporter remet les
+champs issus du classeur à jour et conserve tags et enrichissement. Les tests
+contrôlent les lignes du classeur et ses moyennes après normalisation des scores.
 
 Hydrater d'abord en simulation, puis par petits lots lorsque souhaité :
 
@@ -81,12 +81,15 @@ Hydrater d'abord en simulation, puis par petits lots lorsque souhaité :
 npm.cmd run hydrate -- --dry-run --limit 20
 npm.cmd run hydrate -- --limit 20
 npm.cmd run hydrate -- --id 42
+npm.cmd run hydrate -- --refresh --limit 20
 ```
 
 Sous Windows PowerShell, `npm.cmd` transmet correctement les options : le lanceur
 `npm.ps1` peut supprimer le séparateur `--`. Dans les autres shells, `npm run hydrate -- …` convient.
 
-Les films hydratés sont sautés. Un titre non résolu est marqué `needs_review` et
+Les films hydratés sont sautés sauf avec `--refresh`, qui réutilise les détails OMDb
+en cache sans consommer de quota. Chaque lot affiche le nombre total de films
+restant à vérifier. Un titre non résolu est marqué `needs_review` et
 exclu des prochains lots ; choisir un IMDb via `PATCH /api/films/:id` (`imdb_id`
 accepte aussi une URL IMDb), puis relancer avec `--id`. Les échecs partiels restent
 reprenables. Ctrl+C termine l'opération courante puis ferme la base.
@@ -98,6 +101,13 @@ sans consommer de quota. Les appels extérieurs à cette application ne sont pas
 Le lot s'arrête proprement au budget. Wikidata utilise un User-Agent générique et les
 affiches sont téléchargées localement, sans coût OMDb. L'ajout API déclenche une
 hydratation en arrière-plan ; l'import Excel ne fait aucun appel réseau.
+Wikidata fournit le titre original ; une ancienne valeur égale au titre OMDb est
+considérée comme automatique et peut être corrigée. Une valeur manuelle différente
+est conservée. L'affichage privilégie le titre original, puis le titre français en
+petit s'il diffère ; les titres sans lettre latine passent en sous-titre.
+Le synopsis personnel prime sur le synopsis français de Wikipédia, puis sur celui
+d'OMDb en anglais. Wikipédia est mis en cache séparément, sans quota OMDb ; une
+indisponibilité du synopsis français n'interrompt jamais l'enrichissement.
 
 API : `GET/POST /api/films`, `GET/PATCH/DELETE /api/films/:id`,
 `PUT /api/films/:id/ratings` (`{"ratings":[{"viewer_id":1,"score":8}]}`),
@@ -108,3 +118,7 @@ en un seul payload, sans les gros JSON bruts (disponibles sur la fiche).
 
 Le schéma suit `PRAGMA user_version` ; `needs_review` stocke les résolutions à vérifier
 et `api_log.raw_response` permet le cache durable prévu par le plan.
+À l'ouverture, une base v1 migre automatiquement vers v2 dans une transaction :
+suppression des spectateurs non core et de leurs notes, normalisation des scores,
+contrainte entière 0–10, retrait de l'ancien lien externe et ajout de `plot_fr`.
+Une base neuve atteint le même schéma ; une version supérieure à 2 est refusée.

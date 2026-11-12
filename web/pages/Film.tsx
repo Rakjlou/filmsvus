@@ -3,12 +3,12 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import type { Candidate, Film, Role, SearchResponse, Viewer } from '../types.ts';
 import type { WikidataCandidate } from '../../server/services/wikidata.ts';
 import { api, json, message, useResource } from '../api.ts';
-import { date, number, safeUrl } from '../format.ts';
+import { date, number } from '../format.ts';
 import { Poster } from '../components/Poster.tsx';
 import { Score } from '../components/FilmCard.tsx';
 import { FilmForm } from '../components/FilmForm.tsx';
 import { FilmSearch } from '../components/FilmSearch.tsx';
-import { TagPicker } from '../components/TagPicker.tsx';
+import { displayTitles } from '../titles.ts';
 import { ErrorMessage, Loading } from '../components/Feedback.tsx';
 import { Icon } from '../components/Icon.tsx';
 
@@ -19,7 +19,7 @@ export function FilmPage() {
   const viewers = useResource<Viewer[]>('/viewers');
   const navigate = useNavigate(), location = useLocation();
   const routeState = location.state as { returnTo?: string; added?: boolean } | null;
-  const [editing, setEditing] = useState(false), [tagEdit, setTagEdit] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
+  const [editing, setEditing] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [imdb, setImdb] = useState(''), [candidates, setCandidates] = useState<Candidate[]>();
   const deleteButton = useRef<HTMLButtonElement>(null);
@@ -34,8 +34,8 @@ export function FilmPage() {
     { label: 'Metascore', value: film.metascore, unit: '/100' },
     { label: 'Rotten Tomatoes', value: film.rt_score, unit: '%' },
   ].filter(metric => metric.value !== null) : [];
-  const hasExternalInfo = film && (externalScores.length > 0 || film.awards || film.box_office || film.languages.length > 0 || film.imdb_id || safeUrl(film.letterboxd_url));
-  useEffect(() => { if (film) document.title = `${film.title} · Films vus`; }, [film]);
+  const hasExternalInfo = film && (externalScores.length > 0 || film.awards || film.box_office || film.languages.length > 0 || film.imdb_id);
+  useEffect(() => { if (film) document.title = `${displayTitles(film).main} · Films vus`; }, [film]);
   useEffect(() => {
     if (!film?.needs_review || busy) return;
     const controller = new AbortController();
@@ -76,11 +76,6 @@ export function FilmPage() {
       } else setNotice('Les informations du film sont à jour.');
     } catch (error) { setError(message(error)); resource.reload(); } finally { setBusy(false); }
   }
-  async function updateTags(ids: number[]) {
-    setBusy(true); setError('');
-    try { resource.setData(await api<Film>(`/films/${id}/tags`, json('PUT', { tag_ids: ids }))); }
-    catch (error) { setError(message(error)); } finally { setBusy(false); }
-  }
   async function remove() {
     setBusy(true); setError('');
     try { await api(`/films/${id}`, json('DELETE')); navigate(routeState?.returnTo ?? '/', { replace: true }); }
@@ -90,9 +85,9 @@ export function FilmPage() {
     <Link className="back-link" to={routeState?.returnTo ?? '/'}><Icon name="back" /> Retour à la collection</Link>
     {resource.loading && <Loading />}{resource.error && <ErrorMessage retry={resource.reload}>{resource.error}</ErrorMessage>}
     {film && <article className="film-detail">
-      <div className="detail-poster"><Poster title={film.title} src={film.poster_url} priority /><span className="poster-undertext">Une séance de Fleur & Noé</span></div>
-      <div className="detail-main"><header className="detail-heading"><p className="eyebrow">Vu le {date(film.watched_at)}</p><h1>{film.title}</h1>
-        {(film.title_fr || film.original_title) && <p className="alternate-titles">{[film.title_fr, film.original_title].filter((t, i, list) => t && t !== film.title && list.indexOf(t) === i).join(' · ')}</p>}
+      <div className="detail-top"><div className="detail-poster"><Poster title={displayTitles(film).main} src={film.poster_url} priority /><span className="poster-undertext">Une séance de Fleur & Noé</span></div>
+      <div className="detail-main"><header className="detail-heading"><p className="eyebrow">Vu le {date(film.watched_at)}</p><h1>{displayTitles(film).main}</h1>
+        {displayTitles(film).secondary && <p className="secondary-title">{displayTitles(film).secondary}</p>}
         <p className="detail-director">{film.director_text || film.credits.filter(c => c.role === 'director').map(c => c.name).join(', ') || 'Réalisation à découvrir'}</p>
         <p className="film-facts">{[film.year, film.runtime_min ? `${film.runtime_min} min` : null, ...film.genres, ...film.countries].filter(Boolean).join(' · ') || 'Les détails du film sont à enrichir.'}</p>
       </header>
@@ -100,9 +95,9 @@ export function FilmPage() {
       {error && <ErrorMessage>{error}</ErrorMessage>}{notice && <p className="notice" role="status">{notice}</p>}
       {routeState?.added && !notice && <p className="notice" role="status">{film.hydrated ? 'Séance enregistrée et film enrichi.' : film.needs_review ? 'Séance enregistrée. Vérifiez le film IMDb pour compléter les informations.' : 'Séance enregistrée. L’enrichissement se poursuit en arrière-plan.'}</p>}
       {editing ? <section className="surface edit-panel" aria-label="Modifier le film">{viewers.loading && <Loading />}{viewers.error && <ErrorMessage retry={viewers.reload}>{viewers.error}</ErrorMessage>}{viewers.data && <FilmForm film={film} viewers={viewers.data} onCancel={() => setEditing(false)} onSaved={updated => { resource.setData(updated); setEditing(false); setNotice('Vos modifications sont enregistrées.'); }} />}</section> : <>
-        <section className="ratings-panel" aria-label="Les notes"><div className="couple-rating"><span className="eyebrow">Notre moyenne</span><Score value={film.avg} /><span className="hint">Fleur & Noé</span></div><div className="individual-ratings">{film.ratings.filter(r => r.is_core || r.score !== null).map(r => <div key={r.id}><span>{r.name}{!r.is_core && <small> · invité</small>}</span><Score small value={r.score} /></div>)}<div className="derived-rating"><span>Letterboxd</span><span>{number(film.letterboxd_rating)} <small>/5</small></span></div><div className="derived-rating"><span>Écart F / N</span><span>{number(film.gap)} <small>pts</small></span></div></div></section>
-        <section className="detail-tags"><div className="section-heading"><h2>Souvenirs de séance</h2><button type="button" className="text-button" onClick={() => setTagEdit(!tagEdit)} disabled={busy} aria-expanded={tagEdit}>{tagEdit ? 'Terminer' : 'Modifier les tags'}</button></div>{tagEdit ? <TagPicker value={film.tags.map(t => t.id)} onChange={ids => void updateTags(ids)} disabled={busy} /> : <div className="chips">{film.tags.length ? film.tags.map(tag => <span className="tag-label" key={tag.id}>{tag.emoji} {tag.label}</span>) : <p className="hint">Les petits détails de cette séance restent à ajouter.</p>}</div>}</section>
-        <section className="prose-section"><p className="eyebrow">L’histoire</p><h2>Synopsis</h2><p className="preserve-lines">{film.summary || film.plot_en || 'Le résumé arrivera avec l’enrichissement. Vous pouvez aussi écrire le vôtre.'}</p>{!film.summary && film.plot_en && <p className="hint">Synopsis original fourni par OMDb.</p>}</section>
+        <section className="ratings-panel" aria-label="Les notes"><div className="couple-rating"><span className="eyebrow">Notre moyenne</span><Score value={film.avg} /><span className="hint">Fleur & Noé</span></div><div className="individual-ratings">{film.ratings.filter(r => r.is_core).map(r => <div key={r.id}><span>{r.name}</span><Score small value={r.score} /></div>)}<div className="derived-rating"><span>Écart F / N</span><span>{number(film.gap)} <small>pts</small></span></div></div></section>
+        {film.tags.length > 0 && <section className="detail-tags"><h2>Souvenirs de séance</h2><div className="chips">{film.tags.map(tag => <span className="tag-label" key={tag.id}>{tag.emoji} {tag.label}</span>)}</div></section>}
+        <section className="prose-section"><p className="eyebrow">L’histoire</p><h2>Synopsis</h2><p className="preserve-lines">{film.summary || film.plot_fr || film.plot_en || 'Le résumé arrivera avec l’enrichissement. Vous pouvez aussi écrire le vôtre.'}</p>{!film.summary && (film.plot_fr ? <p className="hint">Synopsis issu de Wikipédia.</p> : film.plot_en && <p className="hint">Synopsis original, en anglais, fourni par OMDb.</p>)}</section>
         <section className="prose-section comment-section"><p className="eyebrow">Après la séance</p><h2>Notre commentaire</h2><p className="preserve-lines">{film.comment || 'Pas encore de commentaire. Qu’est-ce qu’on en garde ?'}</p></section>
       </>}
       <section className="enrichment-panel surface" aria-labelledby="enrichment-title"><div className="section-heading"><h2 id="enrichment-title">Le bon film, les bonnes infos</h2><span className={`status-pill ${film.hydrated ? 'complete' : ''}`}>{film.hydrated ? 'Enrichi' : film.needs_review ? 'À vérifier' : 'À enrichir'}</span></div>
@@ -110,10 +105,11 @@ export function FilmPage() {
         {film.needs_review && !editing && <><p className="hint">Vérifiez le titre ou recherchez le titre original pour choisir la bonne affiche.</p><FilmSearch key={film.id} initialQuery={film.title} initialResults={candidates} onSelect={candidate => void hydrate(candidate.imdbID)} disabled={busy} /></>}
       </section>
     </div>
-    <div className="detail-extras"><section className="surface"><p className="eyebrow">Derrière la caméra</p><h2>Le générique</h2>{credits.length > 0 || companies ? <dl className="credits-list">{credits.map(({ label, names }) => <div key={label}><dt>{label}</dt><dd>{names}</dd></div>)}{companies && <div><dt>Sociétés de production</dt><dd>{companies}</dd></div>}</dl> : <p className="hint">Cliquez sur « Enrichir » pour découvrir le générique.</p>}</section>
-      {hasExternalInfo && <section className="surface"><p className="eyebrow">Les autres regards</p><h2>Au-delà de notre canapé</h2>{externalScores.length > 0 && <div className="external-scores">{externalScores.map(({ label, value, unit }) => <div key={label}><span>{label}</span><b>{number(value)}<small>{unit}</small></b></div>)}</div>}<dl className="credits-list">{film.awards && <div><dt>Récompenses</dt><dd>{film.awards}</dd></div>}{film.box_office && <div><dt>Box-office</dt><dd>{film.box_office}</dd></div>}{film.languages.length > 0 && <div><dt>Langues</dt><dd>{film.languages.join(', ')}</dd></div>}</dl>{(film.imdb_id || safeUrl(film.letterboxd_url)) && <div className="external-links">{film.imdb_id && <a className="button" href={`https://www.imdb.com/title/${film.imdb_id}/`} target="_blank" rel="noopener noreferrer">IMDb <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}{safeUrl(film.letterboxd_url) && <a className="button" href={safeUrl(film.letterboxd_url)} target="_blank" rel="noopener noreferrer">Letterboxd <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}</div>}</section>}
     </div>
-    <div className="delete-area">{confirmDelete ? <section className="delete-confirm" aria-labelledby="delete-title"><h2 id="delete-title">Supprimer « {film.title} » ?</h2><p>Les notes, tags et souvenirs de cette séance seront supprimés.</p><div className="form-actions"><button type="button" autoFocus disabled={busy} onClick={() => { setConfirmDelete(false); window.requestAnimationFrame(() => deleteButton.current?.focus()); }}>Garder le film</button><button className="danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Suppression…' : 'Supprimer définitivement'}</button></div></section> : <button ref={deleteButton} type="button" className="text-button danger-text" disabled={busy || editing} onClick={() => setConfirmDelete(true)}>Supprimer cette séance</button>}</div>
+    <div className="detail-extras"><section className="surface"><p className="eyebrow">Derrière la caméra</p><h2>Le générique</h2>{credits.length > 0 || companies ? <dl className="credits-list">{credits.map(({ label, names }) => <div key={label}><dt>{label}</dt><dd>{names}</dd></div>)}{companies && <div><dt>Sociétés de production</dt><dd>{companies}</dd></div>}</dl> : <p className="hint">Cliquez sur « Enrichir » pour découvrir le générique.</p>}</section>
+      {hasExternalInfo && <section className="surface"><p className="eyebrow">Les autres regards</p><h2>Au-delà de notre canapé</h2>{externalScores.length > 0 && <div className="external-scores">{externalScores.map(({ label, value, unit }) => <div key={label}><span>{label}</span><b>{number(value)}<small>{unit}</small></b></div>)}</div>}<dl className="credits-list">{film.awards && <div><dt>Récompenses</dt><dd>{film.awards}</dd></div>}{film.box_office && <div><dt>Box-office</dt><dd>{film.box_office}</dd></div>}{film.languages.length > 0 && <div><dt>Langues</dt><dd>{film.languages.join(', ')}</dd></div>}</dl>{(film.imdb_id) && <div className="external-links">{film.imdb_id && <a className="button" href={`https://www.imdb.com/title/${film.imdb_id}/`} target="_blank" rel="noopener noreferrer">IMDb <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}</div>}</section>}
+    </div>
+    <div className="delete-area">{confirmDelete ? <section className="delete-confirm" aria-labelledby="delete-title"><h2 id="delete-title">Supprimer « {displayTitles(film).main} » ?</h2><p>Les notes, tags et souvenirs de cette séance seront supprimés.</p><div className="form-actions"><button type="button" autoFocus disabled={busy} onClick={() => { setConfirmDelete(false); window.requestAnimationFrame(() => deleteButton.current?.focus()); }}>Garder le film</button><button className="danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Suppression…' : 'Supprimer définitivement'}</button></div></section> : <button ref={deleteButton} type="button" className="text-button danger-text" disabled={busy || editing} onClick={() => setConfirmDelete(true)}>Supprimer cette séance</button>}</div>
     </article>}
   </>;
 }

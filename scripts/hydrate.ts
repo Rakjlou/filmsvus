@@ -9,12 +9,13 @@ import { createThrottle } from '../server/services/network.ts';
 export function parseOptions(args: string[]) {
   const { values } = parseArgs({ args, options: {
     limit: { type: 'string', default: '20' }, 'dry-run': { type: 'boolean', default: false }, id: { type: 'string' },
+    refresh: { type: 'boolean', default: false },
   } });
   const integer = (value: string, name: string) => {
     if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) throw new Error(`${name} doit être un entier supérieur à zéro`);
     return Number(value);
   };
-  return { limit: integer(values.limit!, '--limit'), dryRun: values['dry-run']!, id: values.id ? integer(values.id, '--id') : undefined };
+  return { limit: integer(values.limit!, '--limit'), dryRun: values['dry-run']!, refresh: values.refresh!, id: values.id ? integer(values.id, '--id') : undefined };
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -23,10 +24,11 @@ export async function main(args = process.argv.slice(2)) {
   try {
     const repo = new FilmsRepo(db);
     const films = (options.id ? [repo.get(options.id)] : repo.list())
-      .filter(f => !f.hydrated && (options.id !== undefined || !f.needs_review)).slice(0, options.limit);
+      .filter(f => (options.refresh || !f.hydrated) && (options.id !== undefined || !f.needs_review)).slice(0, options.limit);
     console.log(`${films.length} film(s) sélectionné(s)${options.dryRun ? ' — simulation, aucun appel réseau' : ''}`);
     if (options.dryRun) {
       for (const film of films) console.log(`${film.id} : ${film.title}`);
+      console.log(`Films restant à vérifier : ${repo.list().filter(f => f.needs_review).length}`);
       return;
     }
     const throttle = createThrottle(1500);
@@ -39,7 +41,7 @@ export async function main(args = process.argv.slice(2)) {
       for (const film of films) {
         if (stop) break;
         try {
-          const result = await hydrate.hydrateFilm(film.id);
+          const result = await hydrate.hydrateFilm(film.id, { force: options.refresh });
           if (result.hydrated) hydrated++; else review++;
           console.log(`${film.id} : ${result.hydrated ? 'enrichi' : 'à vérifier'}`);
         } catch (error) {
@@ -51,6 +53,7 @@ export async function main(args = process.argv.slice(2)) {
       }
     } finally { process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal); }
     console.log({ hydrated, needs_review: review, failed, budget: omdb.budget() });
+    console.log(`Films restant à vérifier : ${repo.list().filter(f => f.needs_review).length}`);
     if (failed) process.exitCode = 1;
   } finally { db.close(); }
 }

@@ -45,7 +45,7 @@ export function computeStats(films: Film[], viewers: Viewer[]) {
     total: films.length, rated: rated.length,
     films_by_year: years, films_by_month: months,
     avg: mean(rated.map(f => f.avg!)),
-    viewers: viewers.map(v => {
+    viewers: viewers.filter(v => v.is_core).map(v => {
       const scores = films.flatMap(f => f.ratings.filter(r => r.id === v.id && r.score !== null).map(r => r.score!));
       const distribution: Record<string, number> = {};
       for (const score of scores) {

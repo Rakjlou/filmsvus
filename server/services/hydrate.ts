@@ -10,6 +10,8 @@ import { WikidataClient, parseWikidata } from './wikidata.ts';
 import type { WikidataCandidate } from './wikidata.ts';
 import { UpstreamError } from './network.ts';
 import type { Fetch } from './network.ts';
+import { normalizeTitle } from '../../shared/titles.ts';
+export { normalizeTitle } from '../../shared/titles.ts';
 
 const text = (value?: string): string | null => value && value !== 'N/A' ? value : null;
 const number = (value?: string): number | null => {
@@ -19,7 +21,7 @@ const number = (value?: string): number | null => {
 const list = (value?: string): string[] => text(value)?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
 export function omdbFields(data: OmdbData): Partial<FilmFields> {
   return {
-    original_title: text(data.Title), year: number(data.Year), runtime_min: number(data.Runtime),
+    year: number(data.Year), runtime_min: number(data.Runtime),
     genres: list(data.Genre), countries: list(data.Country), languages: list(data.Language),
     rated: text(data.Rated), imdb_rating: number(data.imdbRating), imdb_votes: number(data.imdbVotes),
     metascore: number(data.Metascore), rt_score: number(data.Ratings?.find(r => r.Source === 'Rotten Tomatoes')?.Value),
@@ -33,8 +35,6 @@ export function omdbCredits(data: OmdbData): Credit[] {
 export function guessYear(film: Pick<Film, 'title' | 'year'>): number | undefined {
   return film.year ?? (Number(/\((\d{4})\)\s*$/.exec(film.title)?.[1]) || undefined);
 }
-export const normalizeTitle = (value: string): string => value.normalize('NFD').replace(/\p{M}/gu, '')
-  .toLocaleLowerCase('fr').replace(/[^\p{L}\p{N}]/gu, '');
 const searchTitle = (title: string) => title.replace(/\s*\(\d{4}\)\s*$/, '').trim();
 function directorMatch(expected: string, directors: string[]): boolean {
   const names = expected.replace(/\([^)]*\)/g, '').split(/[,;/&]|\bet\b|\band\b/i).map(name => name.trim()).filter(Boolean);
@@ -76,16 +76,16 @@ export class Hydrator {
     this.postersDir = options.postersDir ?? 'data/posters';
     this.now = options.now ?? (() => new Date());
   }
-  async hydrateFilm(id: number): Promise<Film> {
+  async hydrateFilm(id: number, options: { force?: boolean } = {}): Promise<Film> {
     const pending = this.inflight.get(id);
     if (pending) return pending;
-    const work = this.perform(id);
+    const work = this.perform(id, options.force ?? false);
     this.inflight.set(id, work);
     try { return await work; } finally { this.inflight.delete(id); }
   }
-  private async perform(id: number): Promise<Film> {
+  private async perform(id: number, force: boolean): Promise<Film> {
     const film = this.repo.get(id);
-    if (film.hydrated) return film;
+    if (film.hydrated && !force) return film;
     const requireIdentity = (imdbId: string | null) => {
       const current = this.repo.get(id);
       if (current.imdb_id !== imdbId || current.title !== film.title) {
@@ -127,18 +127,31 @@ export class Hydrator {
     // Keep OMDb progress if Wikidata/poster fails; retry reuses the cached response.
     transaction(this.repo.db, () => {
       requireIdentity(film.imdb_id);
-      this.repo.writeFields(id, { ...omdbFields(data), original_title: film.original_title ?? text(data.Title), imdb_id: imdbId, needs_review: false });
+      this.repo.writeFields(id, { ...omdbFields(data), imdb_id: imdbId, needs_review: false });
       if (selected) this.repo.writeFields(id, { title_fr: selected.titleFr,
-        original_title: selected.originalTitle ?? text(data.Title), wikidata_raw: JSON.stringify({ candidate: selected }) });
+        wikidata_raw: JSON.stringify({ candidate: selected }) });
       this.repo.writeCredits(id, omdbCredits(data));
     });
     const wikidataRaw = await this.wikidata.byImdb(imdbId);
     const extra = parseWikidata(wikidataRaw);
+    let plotFr: string | null = null;
+    if (extra.frwiki_title) {
+      try { plotFr = await this.wikidata.frenchSynopsis(extra.frwiki_title); }
+      catch { console.warn(`Film ${id} : synopsis Wikipédia indisponible, enrichissement poursuivi.`); }
+    }
     const posterPath = text(data.Poster) ? await this.downloadPoster(imdbId, data.Poster!) : null;
     transaction(this.repo.db, () => {
       const current = requireIdentity(imdbId);
+      const wikiTitle = selected?.originalTitle ?? extra.original_title;
+      const previousOmdbTitle = film.omdb_raw ? text((JSON.parse(film.omdb_raw) as OmdbData).Title) : null;
+      // No provenance column: a value matching the previous/current OMDb Title is
+      // treated as automatic. Distinct manually entered originals are preserved.
+      const automaticTitle = !current.original_title || current.original_title === previousOmdbTitle || current.original_title === text(data.Title);
+      const originalTitle = automaticTitle
+        ? wikiTitle ?? (selected || wikidataRaw.results.bindings.length ? null : text(data.Title))
+        : current.original_title;
       this.repo.writeFields(id, { title_fr: selected?.titleFr ?? extra.title_fr ?? current.title_fr,
-        original_title: selected?.originalTitle ?? extra.original_title ?? current.original_title,
+        original_title: originalTitle, plot_fr: plotFr,
         wikidata_raw: JSON.stringify(wikidataRaw),
         poster_path: posterPath, hydrated_at: this.now().toISOString(), needs_review: false });
       this.repo.writeCredits(id, extra.credits);

@@ -13,17 +13,17 @@ export interface FilmFields {
   title: string; title_fr: string | null; original_title: string | null;
   year: number | null; watched_at: string; director_text: string | null;
   summary: string | null; comment: string | null; imdb_id: string | null;
-  letterboxd_url: string | null; runtime_min: number | null;
+  runtime_min: number | null;
   genres: string[]; countries: string[]; languages: string[]; rated: string | null;
   imdb_rating: number | null; imdb_votes: number | null; metascore: number | null;
   rt_score: number | null; awards: string | null; box_office: string | null;
-  poster_path: string | null; plot_en: string | null; omdb_raw: string | null;
+  poster_path: string | null; plot_en: string | null; plot_fr: string | null; omdb_raw: string | null;
   wikidata_raw: string | null; hydrated_at: string | null; needs_review: boolean;
 }
 export interface Film extends FilmFields {
   id: number; created_at: string; updated_at: string;
-  ratings: Rating[]; core_ratings: Rating[]; guest_ratings: Rating[];
-  avg: number | null; gap: number | null; letterboxd_rating: number | null;
+  ratings: Rating[]; core_ratings: Rating[];
+  avg: number | null; gap: number | null;
   tags: Tag[]; credits: Credit[]; companies: Company[];
   poster_url: string | null; hydrated: boolean;
 }
@@ -39,9 +39,9 @@ export class InvalidInput extends Error { statusCode = 400; }
 // Only these trusted identifiers can appear in a dynamically constructed UPDATE.
 const columns = new Set([
   'title', 'title_fr', 'original_title', 'year', 'watched_at', 'director_text', 'summary',
-  'comment', 'imdb_id', 'letterboxd_url', 'runtime_min', 'genres', 'countries', 'languages',
+  'comment', 'imdb_id', 'runtime_min', 'genres', 'countries', 'languages',
   'rated', 'imdb_rating', 'imdb_votes', 'metascore', 'rt_score', 'awards', 'box_office',
-  'poster_path', 'plot_en', 'omdb_raw', 'wikidata_raw', 'hydrated_at', 'needs_review',
+  'poster_path', 'plot_en', 'plot_fr', 'omdb_raw', 'wikidata_raw', 'hydrated_at', 'needs_review',
 ]);
 const jsonColumns = new Set(['genres', 'countries', 'languages']);
 
@@ -60,7 +60,7 @@ export class FilmsRepo {
   constructor(db: DatabaseSync) { this.db = db; }
 
   viewers(): Viewer[] {
-    return (this.db.prepare('SELECT * FROM viewers ORDER BY id').all() as unknown as Viewer[])
+    return (this.db.prepare('SELECT * FROM viewers WHERE is_core=1 ORDER BY id').all() as unknown as Viewer[])
       .map(v => ({ ...v, is_core: Boolean(v.is_core) }));
   }
   tags(): Tag[] { return this.db.prepare('SELECT * FROM tags ORDER BY id').all() as unknown as Tag[]; }
@@ -103,7 +103,7 @@ export class FilmsRepo {
         genres: JSON.parse(String(row.genres)), countries: JSON.parse(String(row.countries)),
         languages: JSON.parse(String(row.languages)),
         needs_review: Boolean(row.needs_review),
-        ratings: filmRatings, core_ratings: core, guest_ratings: filmRatings.filter(v => !v.is_core),
+        ratings: filmRatings, core_ratings: core,
         ...ratingMetrics(core.map(v => v.score)),
         tags: (byTag.get(filmId) ?? []).map(({ film_id, ...tag }) => tag),
         credits: (byCredit.get(filmId) ?? []).map(({ film_id, ...credit }) => credit),
@@ -158,7 +158,7 @@ export class FilmsRepo {
         this.writeFields(id, { title_fr: null, original_title: null, year: null,
           runtime_min: null, genres: [], countries: [], languages: [], rated: null,
           imdb_rating: null, imdb_votes: null, metascore: null, rt_score: null,
-          awards: null, box_office: null, plot_en: null, hydrated_at: null,
+          awards: null, box_office: null, plot_en: null, plot_fr: null, hydrated_at: null,
           poster_path: null, omdb_raw: null, wikidata_raw: null, needs_review: false });
         this.db.prepare("DELETE FROM credits WHERE film_id=? AND source!='manual'").run(id);
         this.db.prepare("DELETE FROM companies WHERE film_id=? AND source!='manual'").run(id);

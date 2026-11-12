@@ -16,10 +16,30 @@ export function transaction<T>(db: DatabaseSync, work: () => T): T {
 
 export function migrate(db: DatabaseSync): void {
   const version = Number(db.prepare('PRAGMA user_version').get()!.user_version);
-  if (version > 1) throw new Error(`Version de base non prise en charge : ${version}`);
+  if (version > 2) throw new Error(`Version de base non prise en charge : ${version}`);
   if (version === 0) transaction(db, () => {
     db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
     db.exec('PRAGMA user_version = 1');
+  });
+  if (version < 2) transaction(db, () => {
+    db.exec(`
+      DELETE FROM ratings WHERE viewer_id IN (SELECT id FROM viewers WHERE is_core=0);
+      DELETE FROM viewers WHERE is_core=0;
+      UPDATE ratings SET score=round(max(0,score)) WHERE score IS NOT NULL;
+      CREATE TABLE ratings_v2 (
+        film_id INTEGER NOT NULL REFERENCES films(id) ON DELETE CASCADE,
+        viewer_id INTEGER NOT NULL REFERENCES viewers(id),
+        score INTEGER CHECK(score IS NULL OR (typeof(score)='integer' AND score BETWEEN 0 AND 10)),
+        PRIMARY KEY(film_id, viewer_id)
+      );
+      INSERT INTO ratings_v2 SELECT film_id,viewer_id,score FROM ratings;
+      DROP TABLE ratings;
+      ALTER TABLE ratings_v2 RENAME TO ratings;
+      CREATE INDEX ratings_viewer ON ratings(viewer_id);
+      ALTER TABLE films DROP COLUMN letterboxd_url;
+      ALTER TABLE films ADD COLUMN plot_fr TEXT;
+      PRAGMA user_version = 2;
+    `);
   });
 }
 

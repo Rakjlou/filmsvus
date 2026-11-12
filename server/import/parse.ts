@@ -40,10 +40,10 @@ export function parseScore(value: unknown): number | null {
   const text = parseText(value);
   if (text === null || text === '-') return null;
   const number = Number(text.replace(',', '.'));
-  if (!Number.isFinite(number) || number < -10 || number > 10) {
+  if (!Number.isFinite(number) || number > 10) {
     throw new Error(`Note invalide : ${text}`);
   }
-  return number;
+  return Math.round(Math.max(0, number));
 }
 
 export const PARIS = 'Europe/Paris';
@@ -88,18 +88,5 @@ export function ratingMetrics(scores: (number | null)[]) {
   return {
     avg,
     gap: present.length >= 2 ? Math.max(...present) - Math.min(...present) : null,
-    letterboxd_rating: avg === null ? null : Math.round(avg) / 2,
   };
-}
-
-export function parseLetterboxd(value: unknown): { url: string | null; comment: string | null } {
-  const link = value && typeof value === 'object' && 'hyperlink' in value ? value.hyperlink : value;
-  const text = parseText(link);
-  if (text) {
-    try {
-      const url = new URL(text);
-      if (['http:', 'https:'].includes(url.protocol)) return { url: url.href, comment: null };
-    } catch { /* Non-URL cells are retained as plain comment text. */ }
-  }
-  return { url: null, comment: text ? `Letterboxd : ${text}` : null };
 }

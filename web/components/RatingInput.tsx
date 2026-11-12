@@ -7,8 +7,8 @@ export function RatingInput({ label, value, onChange }: { label: string; value: 
   const [draft, setDraft] = useState<string>();
   const step = (direction: -1 | 1) => { setDraft(undefined); onChange(stepRating(value, direction)); };
   return <fieldset className="rating-input"><legend>{label}</legend>
-    <div className="stepper"><button type="button" aria-label={`Baisser la note de ${label}`} disabled={value === -10} onClick={() => step(-1)}>−</button>
-      <div><label className="sr-only" htmlFor={id}>Note de {label} sur 10, de −10 à 10</label><input id={id} type="number" min="-10" max="10" step="0.5" placeholder="—" value={draft ?? value ?? ''}
+    <div className="stepper"><button type="button" aria-label={`Baisser la note de ${label}`} disabled={value === 0} onClick={() => step(-1)}>−</button>
+      <div><label className="sr-only" htmlFor={id}>Note de {label} sur 10, de 0 à 10</label><input id={id} type="number" min="0" max="10" step="1" placeholder="—" value={draft ?? value ?? ''}
         onChange={event => { const raw = event.target.value; setDraft(raw); if (!raw) onChange(null); else if (event.target.validity.valid) onChange(Number(raw)); }}
         onBlur={() => setDraft(undefined)} /><span>/10</span></div>
       <button type="button" aria-label={`Augmenter la note de ${label}`} disabled={value === 10} onClick={() => step(1)}>+</button></div>

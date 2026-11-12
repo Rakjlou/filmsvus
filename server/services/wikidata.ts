@@ -4,10 +4,11 @@ import type { Credit, Company, Role } from '../repo/films.ts';
 import { normalizeImdb } from '../repo/films.ts';
 import { createThrottle, UpstreamError } from './network.ts';
 import type { Fetch, Throttle } from './network.ts';
+import { normalizeTitle } from '../../shared/titles.ts';
 
 interface Binding { value: string }
 export interface WikidataData {
-  results: { bindings: { filmLabel?: Binding; originalTitle?: Binding; role?: Binding; name?: Binding }[] };
+  results: { bindings: { filmLabel?: Binding; originalTitle?: Binding; frWiki?: Binding; role?: Binding; name?: Binding }[] };
 }
 export interface WikidataCandidate {
   imdbID: string; qid: string; titleFr: string | null; titleEn: string | null;
@@ -46,8 +47,8 @@ export class WikidataClient {
     this.now = options.now ?? (() => new Date());
     this.sleep = options.sleep ?? setTimeout;
   }
-  private async request<T>(key: string, url: URL, accept: string, valid: (raw: T) => boolean, cacheRaw?: (raw: T) => T): Promise<T> {
-    const cached = this.db.prepare("SELECT id,raw_response FROM api_log WHERE provider='wikidata' AND request_key=? AND raw_response IS NOT NULL ORDER BY id DESC LIMIT 1").get(key);
+  private async request<T>(key: string, url: URL, accept: string, valid: (raw: T) => boolean, cacheRaw?: (raw: T) => T, provider = 'wikidata'): Promise<T> {
+    const cached = this.db.prepare('SELECT id,raw_response FROM api_log WHERE provider=? AND request_key=? AND raw_response IS NOT NULL ORDER BY id DESC LIMIT 1').get(provider, key);
     if (cached) {
       const raw = JSON.parse(String(cached.raw_response)) as T;
       if (!cacheRaw) return raw;
@@ -57,17 +58,18 @@ export class WikidataClient {
       if (serialized !== cached.raw_response) this.db.prepare('UPDATE api_log SET raw_response=? WHERE id=?').run(serialized, cached.id!);
       return trimmed;
     }
-    const pending = this.inflight.get(key);
+    const inflightKey = `${provider}:${key}`;
+    const pending = this.inflight.get(inflightKey);
     if (pending) return pending as Promise<T>;
-    const work = this.perform(key, url, accept, valid, cacheRaw);
-    this.inflight.set(key, work);
-    try { return await work; } finally { this.inflight.delete(key); }
+    const work = this.perform(key, url, accept, valid, cacheRaw, provider);
+    this.inflight.set(inflightKey, work);
+    try { return await work; } finally { this.inflight.delete(inflightKey); }
   }
-  private async perform<T>(key: string, url: URL, accept: string, valid: (raw: T) => boolean, cacheRaw?: (raw: T) => T): Promise<T> {
+  private async perform<T>(key: string, url: URL, accept: string, valid: (raw: T) => boolean, cacheRaw?: (raw: T) => T, provider = 'wikidata'): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       await this.throttle();
-      const logId = this.db.prepare("INSERT INTO api_log(provider,request_key,status,at) VALUES ('wikidata',?,0,?)")
-        .run(key, this.now().toISOString()).lastInsertRowid;
+      const logId = this.db.prepare('INSERT INTO api_log(provider,request_key,status,at) VALUES (?,?,0,?)')
+        .run(provider, key, this.now().toISOString()).lastInsertRowid;
       let status = 0;
       let retryAfter: string | null = null;
       try {
@@ -76,7 +78,7 @@ export class WikidataClient {
         });
         status = response.status;
         retryAfter = response.headers.get('Retry-After');
-        if (!response.ok) throw new WikidataUnavailable(`Wikidata HTTP ${status}`);
+        if (!response.ok) throw new WikidataUnavailable(`${provider === 'wikipedia' ? 'Wikipédia' : 'Wikidata'} HTTP ${status}`);
         const raw = await response.json() as T;
         if (!raw || !valid(raw)) throw new WikidataUnavailable('Réponse Wikidata invalide');
         this.db.prepare('UPDATE api_log SET status=?,raw_response=? WHERE id=?').run(status, JSON.stringify(cacheRaw ? cacheRaw(raw) : raw), logId);
@@ -145,10 +147,11 @@ export class WikidataClient {
   }
   async byImdb(id: string): Promise<WikidataData> {
     id = normalizeImdb(id);
-    const query = `SELECT ?filmLabel ?originalTitle ?role ?name WHERE {
+    const query = `SELECT ?filmLabel ?originalTitle ?role ?name ?frWiki WHERE {
       ?film wdt:P345 "${id}" .
       OPTIONAL { ?film rdfs:label ?filmLabel . FILTER(LANG(?filmLabel) = "fr") }
       OPTIONAL { ?film wdt:P1476 ?originalTitle }
+      OPTIONAL { ?frArticle schema:about ?film ; schema:isPartOf <https://fr.wikipedia.org/> ; schema:name ?frWiki }
       OPTIONAL {
         VALUES (?property ?role) {
           (wdt:P86 "composer") (wdt:P344 "cinematographer") (wdt:P1040 "editor")
@@ -160,18 +163,27 @@ export class WikidataClient {
     } ORDER BY ?role ?name`;
     const url = new URL('https://query.wikidata.org/sparql');
     url.searchParams.set('query', query); url.searchParams.set('format', 'json');
-    return this.request<WikidataData>(`imdb:v2:${id}`, url, 'application/sparql-results+json', raw => Array.isArray(raw.results?.bindings));
+    return this.request<WikidataData>(`imdb:v3:${id}`, url, 'application/sparql-results+json', raw => Array.isArray(raw.results?.bindings));
+  }
+  async frenchSynopsis(title: string): Promise<string | null> {
+    const url = new URL('https://fr.wikipedia.org/w/api.php');
+    url.search = new URLSearchParams({ action: 'query', prop: 'extracts', explaintext: '1', exsectionformat: 'wiki',
+      redirects: '1', titles: title, format: 'json', formatversion: '2' }).toString();
+    const raw = await this.request<{ query?: { pages?: { extract?: string }[] } }>(`synopsis:v1:${title}`, url,
+      'application/json', raw => Array.isArray(raw.query?.pages), undefined, 'wikipedia');
+    return extractFrenchSynopsis(raw.query?.pages?.[0]?.extract ?? '');
   }
 }
 
 export function parseWikidata(data: WikidataData) {
   const credits: Credit[] = [], companies: Company[] = [];
   const seen = new Set<string>();
-  let titleFr: string | null = null, originalTitle: string | null = null;
+  let titleFr: string | null = null, originalTitle: string | null = null, frwikiTitle: string | null = null;
   const roles = new Set(['composer', 'cinematographer', 'editor', 'producer', 'writer']);
   for (const binding of data.results.bindings) {
     titleFr ??= binding.filmLabel?.value ?? null;
     originalTitle ??= binding.originalTitle?.value ?? null;
+    frwikiTitle ??= binding.frWiki?.value ?? null;
     const role = binding.role?.value, name = binding.name?.value.trim();
     if (!role || !name || seen.has(`${role}:${name.toLocaleLowerCase()}`)) continue;
     seen.add(`${role}:${name.toLocaleLowerCase()}`);
@@ -179,5 +191,20 @@ export function parseWikidata(data: WikidataData) {
     else if (roles.has(role)) credits.push({ role: role as Role, name,
       position: credits.filter(c => c.role === role).length, source: 'wikidata' });
   }
-  return { title_fr: titleFr, original_title: originalTitle, credits, companies };
+  return { title_fr: titleFr, original_title: originalTitle, frwiki_title: frwikiTitle, credits, companies };
+}
+
+export function extractFrenchSynopsis(extract: string): string | null {
+  const headings = [...extract.matchAll(/^==[ \t]*([^=\r\n]+?)[ \t]*==[ \t]*\r?$/gm)];
+  const index = headings.findIndex(match => ['synopsis', 'resume', 'intrigue', 'histoire', 'scenario'].includes(normalizeTitle(match[1]!)));
+  if (index < 0) return null;
+  const heading = headings[index]!;
+  const body = extract.slice(heading.index + heading[0].length, headings[index + 1]?.index)
+    .replace(/^={3,}.*?={3,}[ \t]*\r?$/gm, '').trim()
+    .split(/\r?\n\s*\r?\n/).map(paragraph => paragraph.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n\n');
+  if (body.length < 40) return null;
+  if (body.length <= 2000) return body;
+  const capped = body.slice(0, 2000);
+  const end = [...capped.matchAll(/[.!?…][»”"']?(?=\s|$)/g)].at(-1);
+  return end ? capped.slice(0, end.index + end[0].length) : capped.slice(0, capped.lastIndexOf(' ')).trimEnd();
 }

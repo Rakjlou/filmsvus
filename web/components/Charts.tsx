@@ -34,10 +34,10 @@ export function ScatterChart({ stats }: { stats: Stats }) {
   const id = useId();
   const { ref, width } = useChartWidth();
   const left = 36, right = width - 16, plot = right - left;
-  return <figure ref={ref} className="chart"><svg viewBox={`0 0 ${width} 320`} role="img" aria-labelledby={`${id}-title ${id}-desc`}><title id={`${id}-title`}>Notre note et celle d’IMDb</title><desc id={`${id}-desc`}>{stats.imdb_pairs.length} films. Axe horizontal : moyenne du couple de −10 à 10. Axe vertical : IMDb de 0 à 10. Corrélation : {number(stats.imdb_correlation, 2)}.</desc>
+  return <figure ref={ref} className="chart"><svg viewBox={`0 0 ${width} 320`} role="img" aria-labelledby={`${id}-title ${id}-desc`}><title id={`${id}-title`}>Notre note et celle d’IMDb</title><desc id={`${id}-desc`}>{stats.imdb_pairs.length} films. Axe horizontal : moyenne du couple de 0 à 10. Axe vertical : IMDb de 0 à 10. Corrélation : {number(stats.imdb_correlation, 2)}.</desc>
     {[0, 2, 4, 6, 8, 10].map(value => <g key={value}><line className="chart-grid" x1={left} x2={right} y1={265 - value * 23} y2={265 - value * 23} /><text className="chart-label" x={left - 10} y={270 - value * 23} textAnchor="end">{value}</text></g>)}
-    {[-10, -5, 0, 5, 10].map(value => <text key={value} className="chart-label" x={left + (value + 10) / 20 * plot} y="287" textAnchor="middle">{value}</text>)}
+    {[0, 2, 4, 6, 8, 10].map(value => <text key={value} className="chart-label" x={left + value / 10 * plot} y="287" textAnchor="middle">{value}</text>)}
     <text className="chart-label" x={left + plot / 2} y="313" textAnchor="middle">Notre moyenne /10</text><text className="chart-label" x="12" y="20">IMDb /10</text>
-    {stats.imdb_pairs.map(p => <circle key={p.id} className="scatter-point" cx={left + (p.avg + 10) / 20 * plot} cy={265 - p.imdb_rating * 23} r="4"><title>{p.title} : nous {number(p.avg)}, IMDb {number(p.imdb_rating)}</title></circle>)}
+    {stats.imdb_pairs.map(p => <circle key={p.id} className="scatter-point" cx={left + p.avg / 10 * plot} cy={265 - p.imdb_rating * 23} r="4"><title>{p.title} : nous {number(p.avg)}, IMDb {number(p.imdb_rating)}</title></circle>)}
   </svg><details className="chart-data"><summary>Consulter les films comparés</summary><table><thead><tr><th scope="col">Film</th><th scope="col">Nous</th><th scope="col">IMDb</th></tr></thead><tbody>{stats.imdb_pairs.map(p => <tr key={p.id}><th scope="row">{p.title}</th><td>{number(p.avg)}</td><td>{number(p.imdb_rating)}</td></tr>)}</tbody></table></details></figure>;
 }

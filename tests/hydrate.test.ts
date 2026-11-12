@@ -9,6 +9,7 @@ import { OmdbClient, BudgetExceeded } from '../server/services/omdb.ts';
 import { WikidataClient, WikidataUnavailable } from '../server/services/wikidata.ts';
 import { Hydrator, HydrationConflict, guessYear } from '../server/services/hydrate.ts';
 import { main, parseOptions } from '../scripts/hydrate.ts';
+import { synopsisExtract, synopsisText } from './fixtures/wikipedia.ts';
 
 const details = {
   Response: 'True', imdbID: 'tt1234567', Title: 'Film', Year: '1999', Runtime: '123 min',
@@ -27,6 +28,96 @@ const wiki = { results: { bindings: [
   { role: { value: 'producer' }, name: { value: 'Producteur' } },
   { role: { value: 'company' }, name: { value: 'Studio' } },
 ] } };
+
+test('titres originaux : Wikidata corrige OMDb, préserve une saisie distincte et OMDb ne sert que sans match', async t => {
+  for (const scenario of [
+    { original: 'An Ordinary Case', wiki: [{ originalTitle: { value: 'Le Fil' } }], expected: 'Le Fil', selected: null },
+    { original: 'Titre choisi à la main', wiki: [{ originalTitle: { value: 'Le Fil' } }], expected: 'Titre choisi à la main', selected: null },
+    { original: null, wiki: [{ filmLabel: { value: 'Le Fil' } }], expected: null, selected: null },
+    { original: null, wiki: [], expected: 'An Ordinary Case', selected: null },
+    { original: null, wiki: [], expected: null, selected: { originalTitle: null } },
+    { original: null, wiki: [], expected: 'Le Fil', selected: { originalTitle: 'Le Fil' } },
+  ]) {
+    const db = tempDb(t), repo = new FilmsRepo(db);
+    const film = repo.create({ title: 'Le Fil', original_title: scenario.original,
+      imdb_id: scenario.selected ? null : 'tt1234567',
+      hydrated_at: scenario.selected ? null : '2026-01-01T00:00:00Z',
+      omdb_raw: JSON.stringify({ Title: 'An Ordinary Case' }) });
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.hostname === 'www.omdbapi.com') return json({ ...details, Title: 'An Ordinary Case', Poster: 'N/A' });
+      assert.equal(url.hostname, 'query.wikidata.org'); return json({ results: { bindings: scenario.wiki } });
+    };
+    const client = new WikidataClient(db, { fetch, throttle: async () => {} });
+    if (scenario.selected) t.mock.method(client, 'searchFilms', async () => [{ imdbID: 'tt1234567', qid: 'Q123', titleFr: 'Le Fil',
+      titleEn: 'An Ordinary Case', originalTitle: scenario.selected!.originalTitle, originalLanguage: 'fr', year: 1999, directors: [] }]);
+    const hydrator = new Hydrator(repo, new OmdbClient(db, { fetch, apiKey: 'test' }), client, { fetch });
+    assert.equal((await hydrator.hydrateFilm(film.id, { force: true })).original_title, scenario.expected);
+  }
+});
+
+test('synopsis français : conservé séparément et panne Wikipédia sans arrêt du film ni du lot', async t => {
+  for (const failure of [false, true]) {
+    const db = tempDb(t), repo = new FilmsRepo(db), logs: unknown[][] = [];
+    t.mock.method(console, 'warn', (...args: unknown[]) => { logs.push(args); });
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.hostname === 'www.omdbapi.com') return json({ ...details, imdbID: url.searchParams.get('i'), Poster: 'N/A' });
+      if (url.hostname === 'query.wikidata.org') return json({ results: { bindings: [{ frWiki: { value: 'Film français' }, originalTitle: { value: 'Le Fil' } }] } });
+      assert.equal(url.hostname, 'fr.wikipedia.org');
+      return failure ? new Response('', { status: 500 }) : json({ query: { pages: [{ extract: synopsisExtract }] } });
+    };
+    const omdb = new OmdbClient(db, { fetch, apiKey: 'test' });
+    const hydrator = new Hydrator(repo, omdb, new WikidataClient(db, { fetch, throttle: async () => {} }), { fetch });
+    for (const imdb_id of ['tt1234567', 'tt7654321']) {
+      const film = repo.create({ title: imdb_id, imdb_id, summary: 'Texte personnel' });
+      const result = await hydrator.hydrateFilm(film.id);
+      assert.equal(result.hydrated, true); assert.equal(result.plot_fr, failure ? null : synopsisText);
+      assert.equal(result.summary, 'Texte personnel'); assert.equal(result.plot_en, 'English plot');
+    }
+    assert.equal(omdb.budget().used, 2); assert.equal(logs.length, failure ? 2 : 0);
+  }
+});
+
+test('CLI --refresh : sélectionne les films enrichis, corrige le titre et récupère plot_fr sans budget OMDb', async t => {
+  const path = join(tempDir(t), 'refresh.db'), db = openDatabase(path), repo = new FilmsRepo(db);
+  const film = repo.create({ title: 'An Ordinary Case', imdb_id: 'tt1234567' });
+  repo.create({ title: 'À choisir', needs_review: true });
+  let calls = 0;
+  const fetch: typeof globalThis.fetch = async input => {
+    calls++;
+    const url = new URL(String(input));
+    if (url.hostname === 'www.omdbapi.com') return json({ ...details, Title: 'An Ordinary Case', Poster: 'N/A' });
+    if (url.hostname === 'query.wikidata.org') return json({ results: { bindings: [{ originalTitle: { value: 'Le Fil' }, frWiki: { value: 'Le Fil' } }] } });
+    assert.equal(url.hostname, 'fr.wikipedia.org'); return json({ query: { pages: [{ extract: synopsisExtract }] } });
+  };
+  const omdb = new OmdbClient(db, { fetch, apiKey: 'test' });
+  const hydrator = new Hydrator(repo, omdb, new WikidataClient(db, { fetch, throttle: async () => {} }), { fetch });
+  await hydrator.hydrateFilm(film.id);
+  const budget = omdb.budget().used;
+  assert.equal(budget, 1);
+  repo.patch(film.id, { original_title: 'An Ordinary Case', plot_fr: null, hydrated_at: '2026-01-01T00:00:00Z' });
+  // Default hydration still skips; force refresh runs every enrichment stage from cache.
+  assert.equal((await hydrator.hydrateFilm(film.id)).plot_fr, null);
+  assert.equal((await hydrator.hydrateFilm(film.id, { force: true })).plot_fr, synopsisText);
+  assert.equal(omdb.budget().used, budget); assert.equal(calls, 3);
+  repo.patch(film.id, { original_title: 'An Ordinary Case', plot_fr: null });
+  db.close();
+  const output: unknown[][] = [];
+  t.mock.method(console, 'log', (...args: unknown[]) => { output.push(args); });
+  const previousPath = process.env.DB_PATH;
+  process.env.DB_PATH = path;
+  try {
+    await main(['--refresh', '--limit', '10']);
+    const saved = openDatabase(path);
+    try {
+      const result = new FilmsRepo(saved).get(film.id);
+      assert.equal(result.original_title, 'Le Fil'); assert.equal(result.plot_fr, synopsisText);
+      assert.equal(new OmdbClient(saved).budget().used, budget);
+      assert.ok(output.some(args => String(args[0]).includes('Films restant à vérifier : 1')));
+    } finally { saved.close(); }
+  } finally { if (previousPath === undefined) delete process.env.DB_PATH; else process.env.DB_PATH = previousPath; }
+});
 
 test('hydratation complète simulée : repli t/y après Wikidata vide, champs, crew, affiche et cache', async t => {
   const db = tempDb(t), repo = new FilmsRepo(db), postersDir = tempDir(t), urls: URL[] = [];
@@ -128,8 +219,8 @@ test('édition pendant un appel réseau : aucune métadonnée écrite sur le nou
 });
 
 test('CLI : défauts, limite, id, simulation et validation', () => {
-  assert.deepEqual(parseOptions([]), { limit: 20, dryRun: false, id: undefined });
-  assert.deepEqual(parseOptions(['--limit', '3', '--dry-run', '--id', '42']), { limit: 3, dryRun: true, id: 42 });
+  assert.deepEqual(parseOptions([]), { limit: 20, dryRun: false, refresh: false, id: undefined });
+  assert.deepEqual(parseOptions(['--limit', '3', '--dry-run', '--id', '42', '--refresh']), { limit: 3, dryRun: true, refresh: true, id: 42 });
   for (const args of [['--limit', '0'], ['--limit', '1.2'], ['--id', '-1'], ['--inconnu']]) assert.throws(() => parseOptions(args));
   assert.equal(guessYear({ title: 'Film (1999)', year: null }), 1999);
   assert.equal(guessYear({ title: '1917', year: null }), undefined);

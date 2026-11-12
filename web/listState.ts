@@ -1,5 +1,6 @@
 import type { Film } from './types.ts';
 import { watchedYear } from './format.ts';
+import { displayTitles } from './titles.ts';
 
 export const sorts = [
   ['watched_at', 'Date de visionnage'], ['title', 'Titre'], ['avg', 'Note moyenne'], ['fleur', 'Note Fleur'],
@@ -35,7 +36,7 @@ export function selectFilms(films: Film[], params: URLSearchParams) {
   const requested = params.get('sort');
   const sort = sorts.find(([key]) => key === requested)?.[0] ?? 'watched_at';
   const direction = params.get('dir') === 'asc' ? 1 : -1;
-  const value = (f: Film) => sort === 'fleur' ? personScore(f, 'Fleur') : sort === 'noe' ? personScore(f, 'Noé') : f[sort];
+  const value = (f: Film) => sort === 'fleur' ? personScore(f, 'Fleur') : sort === 'noe' ? personScore(f, 'Noé') : sort === 'title' ? displayTitles(f).main : f[sort];
   return result.sort((a, b) => {
     const av = value(a), bv = value(b);
     if (av === null && bv !== null) return 1;

@@ -1,13 +1,69 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WikidataClient, WikidataUnavailable } from '../server/services/wikidata.ts';
+import { WikidataClient, WikidataUnavailable, extractFrenchSynopsis, parseWikidata } from '../server/services/wikidata.ts';
 import { OmdbClient } from '../server/services/omdb.ts';
 import { UpstreamError } from '../server/services/network.ts';
 import { buildApp } from '../server/index.ts';
 import { json, tempDb, tempDir, offline } from './helpers.ts';
 import { dansMaPeau, knivesOut, parasite, wikidataFixture } from './fixtures/wikidata.ts';
+import { synopsisExtract, synopsisText } from './fixtures/wikipedia.ts';
 
 const noThrottle = async () => {};
+
+test('Wikipédia : première section narrative, accents/casse, paragraphes, sous-titres et longueur', () => {
+  assert.equal(extractFrenchSynopsis(synopsisExtract), synopsisText);
+  assert.equal(extractFrenchSynopsis(synopsisExtract.replaceAll('\n', '\r\n')), synopsisText);
+  for (const heading of ['Synopsis', 'RÉSUMÉ', 'Intrigue', 'Histoire', 'Scénario']) {
+    assert.equal(extractFrenchSynopsis(synopsisExtract.replace('Synopsis', heading)), synopsisText);
+  }
+  assert.equal(extractFrenchSynopsis('Introduction\n\n== Fiche technique ==\nDu texte technique.'), null);
+  assert.equal(extractFrenchSynopsis('== Synopsis ==\nTrop court.\n\n== Histoire ==\n' + synopsisText), null);
+  assert.equal(extractFrenchSynopsis('=== Synopsis ===\n' + synopsisText), null);
+  assert.equal(extractFrenchSynopsis('== Synopsis ==\n' + synopsisText + '\n\n== Intrigue ==\n' + 'Autre texte. '.repeat(10)), synopsisText);
+  const sentence = 'Une femme retrouve son frère dans la maison de leur enfance. ';
+  const result = extractFrenchSynopsis('== Synopsis ==\n' + sentence.repeat(60))!;
+  assert.ok(result.length <= 2000); assert.ok(result.length > 1900); assert.ok(result.endsWith('.'));
+  assert.equal(result, sentence.repeat(Math.floor(2001 / sentence.length)).trim());
+});
+
+test('Wikipédia : SPARQL v3, titre frwiki, paramètres, cache distinct et aucun budget OMDb', async t => {
+  const db = tempDb(t), urls: URL[] = [];
+  const client = new WikidataClient(db, { throttle: noThrottle, fetch: async (input, init) => {
+    const url = new URL(String(input)); urls.push(url);
+    assert.equal((init!.headers as Record<string, string>)['User-Agent'], 'filmsvus-local/0.1');
+    if (url.hostname === 'query.wikidata.org') {
+      assert.match(url.searchParams.get('query')!, /schema:about \?film ; schema:isPartOf <https:\/\/fr.wikipedia.org\/> ; schema:name \?frWiki/);
+      return json({ results: { bindings: [{ frWiki: { value: 'Le Fil (film)' } }] } });
+    }
+    assert.equal(url.hostname, 'fr.wikipedia.org'); assert.equal(url.pathname, '/w/api.php');
+    assert.deepEqual(Object.fromEntries(url.searchParams), { action: 'query', prop: 'extracts', explaintext: '1', exsectionformat: 'wiki',
+      redirects: '1', titles: 'Le Fil (film)', format: 'json', formatversion: '2' });
+    return json({ query: { pages: [{ extract: synopsisExtract }] } });
+  } });
+  const extra = parseWikidata(await client.byImdb('tt1234567'));
+  assert.equal(extra.frwiki_title, 'Le Fil (film)');
+  assert.equal(await client.frenchSynopsis(extra.frwiki_title!), synopsisText);
+  const cached = new WikidataClient(db, { fetch: offline });
+  assert.equal(await cached.frenchSynopsis('Le Fil (film)'), synopsisText);
+  assert.equal(parseWikidata(await cached.byImdb('tt1234567')).frwiki_title, 'Le Fil (film)');
+  assert.equal(urls.length, 2); assert.equal(new OmdbClient(db).budget().used, 0);
+  assert.equal(db.prepare("SELECT request_key FROM api_log WHERE provider='wikidata'").get()!.request_key, 'imdb:v3:tt1234567');
+  assert.equal(db.prepare("SELECT count(*) AS n FROM api_log WHERE provider='wikipedia' AND status=200").get()!.n, 1);
+});
+
+test('Wikipédia : 429 réessayé, réponses absentes en cache et erreurs non cachées', async t => {
+  const db = tempDb(t), delays: number[] = []; let calls = 0;
+  const client = new WikidataClient(db, { throttle: noThrottle, sleep: async ms => { delays.push(ms); }, fetch: async () => {
+    if (++calls === 1) return new Response('', { status: 429, headers: { 'Retry-After': '3' } });
+    return json({ query: { pages: [{ missing: true }] } });
+  } });
+  assert.equal(await client.frenchSynopsis('Absent'), null);
+  assert.equal(await client.frenchSynopsis('Absent'), null);
+  assert.equal(calls, 2); assert.deepEqual(delays, [3000]);
+  const broken = new WikidataClient(db, { throttle: noThrottle, fetch: async () => json({ error: { code: 'badvalue' } }) });
+  await assert.rejects(broken.frenchSynopsis('Erreur'), UpstreamError);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM api_log WHERE provider='wikipedia' AND raw_response IS NULL").get()!.n, 2);
+});
 test('Wikidata : fusion FR/EN dans l’ordre, filtrage IMDb/séries, année minimale et noms des réalisateurs', async t => {
   const db = tempDb(t);
   const fixture = wikidataFixture([dansMaPeau, knivesOut, parasite], { noise: true,

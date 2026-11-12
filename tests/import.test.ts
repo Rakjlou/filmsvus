@@ -14,8 +14,8 @@ test('migration versionnée, seed et contraintes SQLite', t => {
   const db = tempDb(t);
   migrate(db);
   const repo = new FilmsRepo(db);
-  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 1);
-  assert.deepEqual(repo.viewers().map(v => [v.name, v.is_core]), [['Fleur', true], ['Noé', true], ['Etienne', false]]);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 2);
+  assert.deepEqual(repo.viewers().map(v => [v.name, v.is_core]), [['Fleur', true], ['Noé', true]]);
   assert.equal(repo.tags()[0]!.label, '+1'); assert.equal(repo.tags()[0]!.emoji, '😭');
   const film = repo.create({ title: 'Contraintes' });
   assert.throws(() => repo.setRatings(film.id, [{ viewer_id: 1, score: 11 }]));
@@ -39,28 +39,30 @@ test('classeur réel : chaque ligne, chaque note, moyennes F et idempotence', as
   }
   const first = await importXlsx(db, path);
   const films = repo.list();
-  let count = 0, compared = 0, guests = 0, negatives = 0;
+  let count = 0, compared = 0;
   sheet.eachRow((row, index) => {
     if (index === 1 || row.getCell(1).value === null) return;
     count++;
     const title = parseTitle(row.getCell(1).value), date = parseExcelDate(row.getCell(3).value);
     const film = films.find(f => f.title === title && f.watched_at === date);
     assert.ok(film, `ligne ${index} importée`);
-    for (const [col, name] of [[4, 'Fleur'], [5, 'Noé'], [9, 'Etienne']] as const) {
+    for (const [col, name] of [[4, 'Fleur'], [5, 'Noé']] as const) {
       const score = parseScore(row.getCell(col).value);
       assert.equal(film.ratings.find(r => r.name === name)!.score, score, `ligne ${index} ${name}`);
-      if (score !== null && name === 'Etienne') guests++;
-      if (score !== null && score < 0) negatives++;
     }
     if (parseScore(row.getCell(4).value) !== null && parseScore(row.getCell(5).value) !== null) {
       assert.ok(cachedAverages.has(index), `résultat F${index} présent dans le XML`);
-      assert.ok(Math.abs(film.avg! - cachedAverages.get(index)!) < 1e-9, `moyenne F${index}`);
+      const rawScores = [4, 5].map(col => Number(row.getCell(col).value));
+      if (rawScores.every(score => Number.isInteger(score) && score >= 0)) {
+        assert.ok(Math.abs(film.avg! - cachedAverages.get(index)!) < 1e-9, `moyenne F${index}`);
+      }
+      const scores = [4, 5].map(col => parseScore(row.getCell(col).value)!);
+      assert.equal(film.avg, (scores[0]! + scores[1]!) / 2, `moyenne normalisée ${index}`);
       compared++;
     }
   });
   assert.ok(compared > 300);
   assert.equal(films.length, count); assert.equal(first.imported, count);
-  assert.equal(first.guest_ratings, guests); assert.equal(first.negative_ratings, negatives);
   assert.ok(films.some(f => f.title === '1917'));
   const chosen = films[0]!;
   repo.patch(chosen.id, { hydrated_at: '2026-11-11T00:00:00Z', genres: ['Drama'] });
@@ -71,10 +73,10 @@ test('classeur réel : chaque ligne, chaque note, moyennes F et idempotence', as
   assert.equal(repo.get(chosen.id).hydrated, true);
   assert.deepEqual(repo.get(chosen.id).genres, ['Drama']);
   assert.equal(repo.get(chosen.id).tags.length, 1);
-  t.diagnostic(`${count} films, ${compared} moyennes F contrôlées (zéros inclus), ${guests} notes invité, ${negatives} notes négatives`);
+  t.diagnostic(`${count} films, ${compared} moyennes normalisées contrôlées (zéros inclus)`);
 });
 
-test('import synthétique : ignore F/K/L, utilise caches, texte J, annotations et rollback', async t => {
+test('import synthétique : ignore F et I à L, utilise caches, annotations et rollback', async t => {
   const db = tempDb(t), path = join(tempDir(t), 'source.xlsx');
   const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('Liste');
   sheet.addRow(['Titre', 'Real', 'Date', 'Note Fleur', 'Note Noé', 'Note Moyenne', 'Résumé', 'Commentaire', 'Note Etienne', 'Letterboxd', 'Letterboxed note', 'Ecart']);
@@ -86,8 +88,9 @@ test('import synthétique : ignore F/K/L, utilise caches, texte J, annotations e
   await importXlsx(db, path);
   const films = new FilmsRepo(db).list(), film = films.find(f => f.title === '1917')!;
   assert.equal(film.title, '1917'); assert.equal(film.director_text, 'Maïmouna Doucouré (pedo)');
-  assert.equal(film.avg, -3); assert.equal(film.gap, null);
-  assert.equal(film.comment, 'Commentaire\nLetterboxd : à revoir');
+  assert.equal(film.avg, 0); assert.equal(film.gap, null);
+  assert.equal(film.comment, 'Commentaire');
+  assert.equal(film.ratings.length, 2);
   assert.equal(films.find(f => f.title === 'Zéro calculé')!.avg, 1);
   sheet.addRow(['Film invalide', '', 46326, 11]);
   await workbook.xlsx.writeFile(path);
