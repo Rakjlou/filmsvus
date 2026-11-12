@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDb, tempDir, json } from './helpers.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
@@ -158,6 +158,39 @@ test('hydratation complète simulée : repli t/y après Wikidata vide, champs, c
   // Simulate an interrupted finalization; cached details/wiki/poster avoid all calls.
   repo.patch(film.id, { hydrated_at: null });
   await hydrator.hydrateFilm(film.id); assert.equal(urls.length, 5);
+});
+
+test('affiche indisponible : hydratation poursuivie sans fichier partiel', async t => {
+  for (const scenario of [
+    { name: 'HTTP 404', reason: 'Affiche HTTP 404', response: () => new Response('', { status: 404 }) },
+    { name: 'contenu non image', reason: 'Affiche non image', response: () => new Response('<html></html>', { headers: { 'content-type': 'text/html' } }) },
+    { name: 'erreur réseau', reason: 'fetch failed', response: () => { throw new TypeError('fetch failed'); } },
+    { name: 'timeout', reason: 'Délai dépassé', response: () => { throw new DOMException('Délai dépassé', 'TimeoutError'); } },
+    { name: 'URL invalide', reason: 'Invalid URL', poster: 'invalid-url' },
+    { name: 'protocole invalide', reason: 'URL affiche invalide', poster: 'file:///poster.jpg' },
+  ]) await t.test(scenario.name, async t => {
+    const db = tempDb(t), repo = new FilmsRepo(db), postersDir = tempDir(t), logs: unknown[][] = [];
+    const film = repo.create({ title: 'Film', imdb_id: 'tt1234567', poster_path: 'ancienne.jpg' });
+    t.mock.method(console, 'warn', (...args: unknown[]) => { logs.push(args); });
+    const fetch: typeof globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.hostname === 'www.omdbapi.com') return json({ ...details, Poster: scenario.poster ?? details.Poster });
+      if (url.hostname === 'query.wikidata.org') return json(wiki);
+      assert.equal(url.hostname, 'images.example.org');
+      assert.ok(scenario.response, 'Une URL invalide ne doit pas être téléchargée');
+      return scenario.response();
+    };
+    const hydrator = new Hydrator(repo, new OmdbClient(db, { apiKey: 'test', fetch }),
+      new WikidataClient(db, { fetch, throttle: async () => {} }), { fetch, postersDir });
+    await hydrator.hydrateFilm(film.id);
+    const result = repo.get(film.id);
+    assert.equal(result.hydrated, true); assert.ok(result.hydrated_at);
+    assert.equal(result.poster_path, null); assert.equal(result.poster_url, null);
+    assert.equal(result.runtime_min, 123);
+    assert.equal(result.credits.find(c => c.role === 'composer')?.name, 'Compositeur');
+    assert.deepEqual(await readdir(postersDir), []);
+    assert.deepEqual(logs, [[`Film ${film.id} : affiche indisponible (${scenario.reason}), enrichissement poursuivi.`]]);
+  });
 });
 
 test('titre introuvable ou année incohérente : needs_review après Wikidata vide, sans affiche', async t => {

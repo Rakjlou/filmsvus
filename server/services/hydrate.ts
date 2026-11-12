@@ -124,7 +124,7 @@ export class Hydrator {
     if (data.Response !== 'True' || !data.imdbID) return markReview(selected ? [selected] : []);
     const imdbId = normalizeImdb(data.imdbID);
     if ((film.imdb_id || selected) && imdbId !== (film.imdb_id ?? selected!.imdbID)) throw new UpstreamError('OMDb a renvoyé un autre ID IMDb');
-    // Keep OMDb progress if Wikidata/poster fails; retry reuses the cached response.
+    // Keep OMDb progress if Wikidata fails; retry reuses the cached response.
     transaction(this.repo.db, () => {
       requireIdentity(film.imdb_id);
       this.repo.writeFields(id, { ...omdbFields(data), imdb_id: imdbId, needs_review: false });
@@ -139,7 +139,14 @@ export class Hydrator {
       try { plotFr = await this.wikidata.frenchSynopsis(extra.frwiki_title); }
       catch { console.warn(`Film ${id} : synopsis Wikipédia indisponible, enrichissement poursuivi.`); }
     }
-    const posterPath = text(data.Poster) ? await this.downloadPoster(imdbId, data.Poster!) : null;
+    let posterPath: string | null = null;
+    if (text(data.Poster)) {
+      try { posterPath = await this.downloadPoster(imdbId, data.Poster!); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`Film ${id} : affiche indisponible (${reason}), enrichissement poursuivi.`);
+      }
+    }
     transaction(this.repo.db, () => {
       const current = requireIdentity(imdbId);
       const wikiTitle = selected?.originalTitle ?? extra.original_title;
