@@ -46,7 +46,7 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 ### Ports et environnement Windows
 
 - **3000 est occupé par un service Windows (svchost) et 5141–5240 est réservé par Windows**, dont le 5173 de Vite. Les deux donnent `EACCES`. D'où le couple 3210 / 4200, à ne pas remettre par défaut.
-- Démarrer les serveurs exige de sortir du bac à sable (le propriétaire a déjà accepté). Un ancien `npm run dev` peut survivre comme process `node` orphelin : vérifier avec `netstat -ano | grep 3210` avant de relancer.
+- Démarrer les serveurs exige de sortir du bac à sable (le propriétaire a déjà accepté). Un ancien `npm run dev` peut survivre comme process `node` orphelin : vérifier avec `netstat -ano | grep 3210` avant de relancer. Arrêter un `npm run dev` lancé en tâche de fond ne tue que le wrapper : tuer aussi le PID node qui écoute (`taskkill //PID <pid> //T //F` sous Git Bash).
 - Avec curl sous Git Bash, les accents sont mal encodés. Pour tester `/api/search`, encoder l'URL à la main (`Tir%C3%A9s`) ou passer par le navigateur.
 
 ## Données
@@ -84,6 +84,6 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 
 ## Pistes ouvertes
 
-- Passe d'hydratation complète, puis revue manuelle des films en `needs_review`.
+- **Hydratation faite le 12/11/2026** : 326 films enrichis sur 394, **68 en `needs_review`** (plusieurs candidats plausibles) à trancher par le propriétaire depuis la fiche. Wikidata a coupé une fois en cours de lot (429) : il suffit de relancer.
 - Pas d'affiche dans les candidats venant de Wikidata (seulement des initiales).
 - Sauvegarde de `data/films.db` (export ou remote) si le propriétaire le souhaite.
