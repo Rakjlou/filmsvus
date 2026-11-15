@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
+export const SUPPORTED_DB_VERSION = 2;
+
 export function transaction<T>(db: DatabaseSync, work: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -16,7 +18,7 @@ export function transaction<T>(db: DatabaseSync, work: () => T): T {
 
 export function migrate(db: DatabaseSync): void {
   const version = Number(db.prepare('PRAGMA user_version').get()!.user_version);
-  if (version > 2) throw new Error(`Version de base non prise en charge : ${version}`);
+  if (version > SUPPORTED_DB_VERSION) throw new Error(`Version de base non prise en charge : ${version}`);
   if (version === 0) transaction(db, () => {
     db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
     db.exec('PRAGMA user_version = 1');

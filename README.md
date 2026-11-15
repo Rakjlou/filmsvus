@@ -28,6 +28,7 @@ les affiches `data/posters/` et `.env` sont ignorés par Git.
 | `npm start` | API + SPA de `dist/` en production, sans surveillance |
 | `npm run import:xlsx` | Import idempotent, clé titre + date ; résumé en sortie |
 | `npm run hydrate -- --limit 20` | Enrichissement par lots, environ un appel/s |
+| `npm run export:data -- --out data/export` | Archive cohérente de la base et des affiches ; [transfert et sauvegardes](deploy/DONNEES.md) |
 | `npm test` | Tests `node:test`, SQLite temporaire, réseau entièrement simulé |
 | `npm run typecheck` | Vérification TypeScript stricte du serveur, des scripts, tests et de `web/` |
 | `npm run build` | Typecheck puis build Vite de la SPA dans `dist/` |

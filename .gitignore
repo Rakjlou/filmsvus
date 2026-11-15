@@ -4,4 +4,5 @@ dist/
 data/*.db*
 data/posters/
 data/source/
+data/export/
 coverage/

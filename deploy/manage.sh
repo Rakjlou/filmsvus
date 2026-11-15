@@ -223,7 +223,7 @@ WantedBy=multi-user.target
 EOF
   printf 'Installed for https://%s. Next steps:\n' "$DOMAIN"
   printf '  sudoedit %s  # set OMDB_API_KEY\n' "$ENV_FILE"
-  printf '  Import your data (see deploy/INSTALL.md).\n'
+  printf '  Import your data (see deploy/DONNEES.md).\n'
   printf '  sudo nginx-site start %s\n' "$PROJECT"
 }
 
@@ -290,15 +290,114 @@ set_password() (
   printf 'Password saved for %s. If the site is running: sudo systemctl reload nginx\n' "$username"
 )
 
+require_service_stopped() {
+  local state
+  state=$(systemctl is-active "$PROJECT.service") || true
+  case $state in
+    inactive|failed) ;;
+    active|activating|deactivating|reloading) fail "Service is not stopped. Run: sudo nginx-site stop $PROJECT" ;;
+    *) fail "Cannot confirm that $PROJECT.service is stopped (state: $state). Check the installation and systemd." ;;
+  esac
+}
+
+import_data() (
+  require_root
+  require_tools tar jq sha256sum systemctl runuser mktemp install chown chmod cp mv rm mkdir date flock
+  local archive=$1 work='' stage listing verbose entry normalized kind line expected actual checked films posters backup=''
+  [[ -f $archive && ! -L $archive ]] || fail 'The archive must be a regular file.'
+  [[ -x $APP_HOME/.local/bin/node ]] || fail 'Install the application first (Node is missing).'
+  [[ -d $CONFIG_DIR ]] || fail 'Install the application first (config is missing).'
+  exec 9>"$CONFIG_DIR/.filmsvus-manage.lock"
+  flock 9
+  require_service_stopped
+  umask 077
+  work=$(mktemp -d)
+  trap '[[ -z $work ]] || rm -rf -- "$work"' EXIT
+  # Freeze the input before validation; never extract from an operator-writable archive.
+  cp -- "$archive" "$work/archive.tar.gz"
+  archive=$work/archive.tar.gz
+  listing=$(LC_ALL=C tar -tzf "$archive") || fail 'Cannot list archive.'
+  verbose=$(LC_ALL=C tar -tvzf "$archive") || fail 'Cannot inspect archive types.'
+  [[ -n $listing && -n $verbose ]] || fail 'Empty archive.'
+  local -A seen=()
+  while IFS= read -r entry; do
+    [[ $entry =~ ^(\./)?(films\.db|manifest\.json|posters/?|posters/[A-Za-z0-9._-]+)$ ]] ||
+      fail "Unsafe archive entry: $entry"
+    normalized=${entry#./}
+    [[ $normalized != posters/. && $normalized != posters/.. ]] || fail 'Dot components are forbidden.'
+    normalized=${normalized%/}
+    [[ ! ${seen[$normalized]+present} ]] || fail "Duplicate archive entry: $entry"
+    seen[$normalized]=1
+  done <<< "$listing"
+  [[ ${seen[films.db]+present} && ${seen[manifest.json]+present} && ${seen[posters]+present} ]] ||
+    fail 'Archive must contain films.db, manifest.json and posters/.'
+  while IFS= read -r line; do
+    kind=${line:0:1}
+    [[ $kind == '-' || $kind == d ]] || fail 'Archive links and special files are forbidden.'
+  done <<< "$verbose"
+  stage=$work/content
+  mkdir -- "$stage"
+  tar -xzf "$archive" --no-same-owner --no-same-permissions -C "$stage"
+  [[ -f $stage/films.db && -f $stage/manifest.json && -d $stage/posters ]] || fail 'Invalid archive layout.'
+  jq -e 'type == "object" and .format == 1 and
+    (.sha256["films.db"] | type == "string" and test("^[a-f0-9]{64}$")) and
+    (.films | type == "number" and . >= 0 and . == floor) and
+    (.posters | type == "number" and . >= 0 and . == floor) and
+    (.user_version | type == "number" and . >= 0 and . == floor)' "$stage/manifest.json" >/dev/null ||
+    fail 'Invalid manifest.'
+  expected=$(jq -r '.sha256["films.db"]' "$stage/manifest.json")
+  actual=$(sha256sum -- "$stage/films.db")
+  [[ ${actual%% *} == "$expected" ]] || fail 'Database SHA-256 mismatch.'
+  # The app-owned Node executable must NEVER execute as root.
+  chmod 0711 "$work"
+  chmod 0700 "$stage" "$stage/posters"
+  chmod 0600 "$stage/films.db" "$stage/manifest.json"
+  chown -R "$PROJECT:$PROJECT" "$stage"
+  checked=$(runuser -u "$PROJECT" -- "$APP_HOME/.local/bin/node" "$APP_ROOT/scripts/check-db.ts" "$stage/films.db") ||
+    fail 'Database validation failed.'
+  films=$(jq -er '.films' <<< "$checked")
+  [[ $films == "$(jq -r '.films' "$stage/manifest.json")" ]] || fail 'Film count differs from manifest.'
+  [[ $(jq -r '.user_version' <<< "$checked") == "$(jq -r '.user_version' "$stage/manifest.json")" ]] ||
+    fail 'Database version differs from manifest.'
+  posters=0
+  local poster suffix
+  shopt -s nullglob dotglob
+  for poster in "$stage/posters/"*; do
+    [[ -f $poster && ! -L $poster ]] || fail 'Posters must be regular files.'
+    posters=$((posters + 1))
+  done
+  [[ $posters == "$(jq -r '.posters' "$stage/manifest.json")" ]] || fail 'Poster count differs from manifest.'
+  require_service_stopped
+
+  install -d -o "$PROJECT" -g "$PROJECT" -m 0700 "$APP_HOME/data" "$APP_HOME/data/posters"
+  if [[ -e $APP_HOME/data/films.db ]]; then
+    install -d -o "$PROJECT" -g "$PROJECT" -m 0700 "$APP_HOME/data/backups"
+    backup=$(mktemp -d "$APP_HOME/data/backups/$(date -u +%Y%m%d-%H%M%S).XXXXXX")
+    chown "$PROJECT:$PROJECT" "$backup"
+    for suffix in '' -wal -shm; do
+      if [[ -e $APP_HOME/data/films.db$suffix || -L $APP_HOME/data/films.db$suffix ]]; then
+        mv -- "$APP_HOME/data/films.db$suffix" "$backup/"
+      fi
+    done
+  fi
+  rm -f -- "$APP_HOME/data/films.db-wal" "$APP_HOME/data/films.db-shm"
+  install -o "$PROJECT" -g "$PROJECT" -m 0600 "$stage/films.db" "$APP_HOME/data/films.db"
+  for poster in "$stage/posters/"*; do
+    install -o "$PROJECT" -g "$PROJECT" -m 0600 "$poster" "$APP_HOME/data/posters/${poster##*/}"
+  done
+  printf 'Imported: %s films, %s posters. Backup: %s\n' "$films" "$posters" "${backup:-none (no previous database)}"
+  printf 'Next step: sudo nginx-site start %s\n' "$PROJECT"
+)
+
 usage() {
-  printf 'Usage: bash deploy/manage.sh {install|update|check|status|set-password <user>}\n' >&2
+  printf 'Usage: bash deploy/manage.sh {install|update|check|status|set-password <user>|import-data <archive.tar.gz>}\n' >&2
 }
 
 main() {
   local command=${1:-}
   case $command in
     install|update|check|status|_install-node|_build) [[ $# -eq 1 ]] || { usage; return 1; } ;;
-    set-password) [[ $# -eq 2 ]] || { usage; return 1; } ;;
+    set-password|import-data) [[ $# -eq 2 ]] || { usage; return 1; } ;;
     *) usage; return 1 ;;
   esac
   init_paths
@@ -307,6 +406,7 @@ main() {
     check) check_app ;;
     status) status_app ;;
     set-password) set_password "$2" ;;
+    import-data) import_data "$2" ;;
     _install-node) install_node ;;
     _build) build_app ;;
   esac

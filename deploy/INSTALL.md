@@ -76,9 +76,9 @@
    s'exécute sans typecheck sur le VPS ; les trois contrôles locaux restent
    requis avant chaque commit. Les hooks ne démarrent aucun service.
 
-6. **Importer les données locales.** La procédure sera documentée dans
-   [deploy/DONNEES.md](DONNEES.md) lors d'une prochaine tâche. Effectuer cet
-   import avant de démarrer ; aucun hook ne réimporte ni ne supprime les données.
+6. **Importer les données locales.** Suivre [DONNEES.md](DONNEES.md) pour
+   l'export, le transfert et l'import manuel, avant le premier démarrage.
+   Ce guide couvre aussi les sauvegardes et le retour arrière.
 
 7. **Démarrer et contrôler** :
 

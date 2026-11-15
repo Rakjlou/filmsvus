@@ -45,6 +45,7 @@ L'authentification Basic nginx est obligatoire avant toute mise en service.
 | `npm run dev` | API Fastify **:3210** + Vite **:4200** (ouvrir 4200). Vite recharge le front ; **relancer après toute modif serveur**. |
 | `npm test` / `npm run typecheck` / `npm run build` | Doivent rester verts à chaque commit. |
 | `npm run import:xlsx` | Import idempotent de `data/source/filmsvus.xlsx` (feuille `Liste`). |
+| `npm run export:data [-- --out data/export]` | Archive cohérente base + affiches, horodatage UTC ; voir `deploy/DONNEES.md`. |
 | `npm run hydrate -- --limit N [--dry-run] [--id X]` | Enrichissement par lots. Saute les films déjà faits, s'arrête au budget. |
 
 ### Ports et environnement Windows
