@@ -29,7 +29,7 @@ export function buildApp(options: AppOptions = {}) {
   const throttle = createThrottle(options.throttleMs ?? 1000);
   const omdb = new OmdbClient(db, { fetch: options.fetch, apiKey: options.apiKey, dailyBudget: options.dailyBudget, throttle });
   const wikidata = new WikidataClient(db, { fetch: options.fetch, throttle });
-  const postersDir = resolve(options.postersDir ?? 'data/posters');
+  const postersDir = resolve(options.postersDir ?? process.env.POSTERS_DIR ?? 'data/posters');
   const hydrator = new Hydrator(repo, omdb, wikidata, { fetch: options.fetch, postersDir });
   const jobs = new Set<Promise<unknown>>();
   const schedule = (id: number) => {

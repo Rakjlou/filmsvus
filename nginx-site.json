@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "script": "deploy/manage.sh",
+  "hooks": { "install": "root", "update": "root", "check": "project", "status": "project" },
+  "units": ["filmsvus.service"]
+}

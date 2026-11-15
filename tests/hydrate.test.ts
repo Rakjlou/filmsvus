@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tempDb, tempDir, json } from './helpers.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
 import { openDatabase } from '../server/db/index.ts';
+import { buildApp } from '../server/index.ts';
 import { OmdbClient, BudgetExceeded } from '../server/services/omdb.ts';
 import { WikidataClient, WikidataUnavailable } from '../server/services/wikidata.ts';
 import { Hydrator, HydrationConflict, guessYear } from '../server/services/hydrate.ts';
@@ -28,6 +29,43 @@ const wiki = { results: { bindings: [
   { role: { value: 'producer' }, name: { value: 'Producteur' } },
   { role: { value: 'company' }, name: { value: 'Studio' } },
 ] } };
+
+test('POSTERS_DIR : hydratation et serveur partagent le répertoire par défaut de l’environnement', async t => {
+  const previous = process.env.POSTERS_DIR;
+  const directory = join(tempDir(t), 'external-posters');
+  const db = tempDb(t), repo = new FilmsRepo(db);
+  const bytes = new Uint8Array([255, 216, 255, 217]);
+  const fetch: typeof globalThis.fetch = async input => {
+    const url = new URL(String(input));
+    if (url.hostname === 'www.omdbapi.com') return json(details);
+    if (url.hostname === 'query.wikidata.org') return json(wiki);
+    assert.equal(url.hostname, 'images.example.org');
+    return new Response(bytes, { headers: { 'content-type': 'image/jpeg' } });
+  };
+  process.env.POSTERS_DIR = directory;
+  try {
+    const omdb = new OmdbClient(db, { apiKey: 'test', fetch });
+    const wikidata = new WikidataClient(db, { fetch });
+    const hydrator = new Hydrator(repo, omdb, wikidata, { fetch });
+    const film = repo.create({ title: 'Affiche externe', imdb_id: details.imdbID });
+    const hydrated = await hydrator.hydrateFilm(film.id);
+    assert.equal(hydrated.hydrated, true);
+    assert.deepEqual(await readFile(join(directory, 'tt1234567.jpg')), Buffer.from(bytes));
+    const app = buildApp({ db, fetch, backgroundHydration: false });
+    try {
+      const response = await app.inject('/posters/tt1234567.jpg');
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.rawPayload, Buffer.from(bytes));
+    } finally { await app.close(); }
+    const override = tempDir(t);
+    assert.equal(new Hydrator(repo, omdb, wikidata, { postersDir: override }).postersDir, override);
+    const explicitApp = buildApp({ db, fetch, backgroundHydration: false, postersDir: override });
+    try { assert.equal((await explicitApp.inject('/posters/tt1234567.jpg')).statusCode, 404); }
+    finally { await explicitApp.close(); }
+  } finally {
+    if (previous === undefined) delete process.env.POSTERS_DIR; else process.env.POSTERS_DIR = previous;
+  }
+});
 
 test('titres originaux : Wikidata corrige OMDb, préserve une saisie distincte et OMDb ne sert que sans match', async t => {
   for (const scenario of [

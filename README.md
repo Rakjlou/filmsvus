@@ -18,7 +18,7 @@ Les deux serveurs tournent dans le même processus et se ferment ensemble avec C
 Vite recharge les changements du frontend ; relancer `dev` après une modification serveur.
 La clé **OMDb reste dans `.env`**, chargé
 par `--env-file-if-exists` ; renseigner `OMDB_API_KEY` si nécessaire. `.env.example`
-ne contient aucune clé. `PORT`, `DB_PATH` et `OMDB_DAILY_BUDGET` sont configurables.
+ne contient aucune clé. `PORT`, `DB_PATH`, `POSTERS_DIR` et `OMDB_DAILY_BUDGET` sont configurables.
 La source `data/source/filmsvus.xlsx` (feuille `Liste`), la base `data/films.db`,
 les affiches `data/posters/` et `.env` sont ignorés par Git.
 
@@ -122,3 +122,9 @@ et `api_log.raw_response` permet le cache durable prévu par le plan.
 suppression des spectateurs non core et de leurs notes, normalisation des scores,
 contrainte entière 0–10, retrait de l'ancien lien externe et ajout de `plot_fr`.
 Une base neuve atteint le même schéma ; une version supérieure à 2 est refusée.
+
+## Déploiement
+
+Le [guide de déploiement](deploy/INSTALL.md) décrit l'installation sur Debian avec
+nginx-site ≥ 1.1 : Node local au projet, systemd, données hors du checkout et
+authentification Basic obligatoire dans nginx.

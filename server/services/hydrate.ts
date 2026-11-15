@@ -73,7 +73,7 @@ export class Hydrator {
   constructor(repo: FilmsRepo, omdb: OmdbClient, wikidata: WikidataClient, options: Options = {}) {
     this.repo = repo; this.omdb = omdb; this.wikidata = wikidata;
     this.fetch = options.fetch ?? globalThis.fetch;
-    this.postersDir = options.postersDir ?? 'data/posters';
+    this.postersDir = options.postersDir ?? process.env.POSTERS_DIR ?? 'data/posters';
     this.now = options.now ?? (() => new Date());
   }
   async hydrateFilm(id: number, options: { force?: boolean } = {}): Promise<Film> {

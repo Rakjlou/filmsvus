@@ -34,6 +34,10 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 - **Spécification validée** : `docs/PLAN.md`.
 - **Arborescence** : `server/` (db, import, repo, routes, services), `scripts/` (dev, import-xlsx, hydrate), `web/` (pages, components), `tests/` (`node:test`, réseau entièrement simulé, fixtures dans `tests/fixtures/`).
 
+Déploiement : application gérée par nginx-site ≥ 1.1 via `deploy/manage.sh` ; guide dans `deploy/INSTALL.md`.
+La version Node du VPS est fixée par `.node-version` ; données dans `/home/filmsvus/data/`, hors du checkout.
+L'authentification Basic nginx est obligatoire avant toute mise en service.
+
 ### Commandes
 
 | Commande | Rôle |
