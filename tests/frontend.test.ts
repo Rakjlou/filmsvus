@@ -105,6 +105,23 @@ test('liste : recherche accent-insensible dans les souvenirs et le générique, 
   assert.equal(selectFilms(films, new URLSearchParams('gap=11')).length, 0);
 });
 
+test('liste : recherches répétées sur les mêmes films, accents et objets remplacés', t => {
+  const repo = new FilmsRepo(tempDb(t));
+  const film = repo.create({ title: 'Été', comment: 'Mémorable', credits: [{ role: 'composer', name: 'Éric Serra', position: 0, source: 'manual' }] });
+  repo.create({ title: 'Autre' });
+  const films = repo.list(), original = films.map(f => f.id);
+  for (let pass = 0; pass < 3; pass++) {
+    for (const q of ['ete', 'ÉTÉ', 'memorable', 'MÉMORABLE', 'eric', 'ÉRIC']) {
+      assert.deepEqual(selectFilms(films, new URLSearchParams({ q })).map(f => f.id), [film.id]);
+    }
+    assert.equal(selectFilms(films, new URLSearchParams('q=absent')).length, 0);
+  }
+  const edited = films.map(f => f.id === film.id ? { ...f, title: 'Forêt' } : f);
+  assert.deepEqual(selectFilms(edited, new URLSearchParams('q=foret')).map(f => f.id), [film.id]);
+  assert.equal(selectFilms(edited, new URLSearchParams('q=ete')).length, 0);
+  assert.deepEqual(films.map(f => f.id), original);
+});
+
 test('liste : tous les tris, notes entières, absences en dernier dans les deux sens, entrée préservée', t => {
   const repo = new FilmsRepo(tempDb(t));
   const first = repo.create({ title: 'A', watched_at: '2024-01-01T00:00:00Z', director_text: 'A', year: 1990,

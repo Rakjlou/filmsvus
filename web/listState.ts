@@ -11,6 +11,16 @@ export const filterKeys = ['tag', 'genre', 'director', 'year', 'decade', 'min', 
 const normalize = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('fr');
 export const personScore = (film: Film, name: string) => film.core_ratings.find(r => normalize(r.name) === normalize(name))?.score ?? null;
 export const directorNames = (film: Film) => [...new Set([film.director_text, ...film.credits.filter(c => c.role === 'director').map(c => c.name)].filter((s): s is string => Boolean(s)))];
+// API reloads replace film objects, so edited films naturally get fresh search text.
+const searchTexts = new WeakMap<Film, string>();
+function searchText(film: Film) {
+  let text = searchTexts.get(film);
+  if (text === undefined) {
+    text = normalize([film.title, film.title_fr, film.original_title, film.director_text, film.summary, film.comment, ...film.credits.map(c => c.name)].join(' '));
+    searchTexts.set(film, text);
+  }
+  return text;
+}
 export function selectFilms(films: Film[], params: URLSearchParams) {
   const query = normalize(params.get('q')?.trim() ?? '');
   const selectedTags = params.getAll('tag');
@@ -20,7 +30,7 @@ export function selectFilms(films: Film[], params: URLSearchParams) {
   };
   const min = numericFilter('min'), max = numericFilter('max'), gap = numericFilter('gap');
   const result = films.filter(f => {
-    if (query && !normalize([f.title, f.title_fr, f.original_title, f.director_text, f.summary, f.comment, ...f.credits.map(c => c.name)].join(' ')).includes(query)) return false;
+    if (query && !searchText(f).includes(query)) return false;
     if (selectedTags.some(id => !f.tags.some(tag => String(tag.id) === id))) return false;
     if (params.get('genre') && !f.genres.includes(params.get('genre')!)) return false;
     if (params.get('director') && !directorNames(f).includes(params.get('director')!)) return false;
