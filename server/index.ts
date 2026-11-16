@@ -16,16 +16,23 @@ import { tagRoutes } from './routes/tags.ts';
 import { viewerRoutes } from './routes/viewers.ts';
 import { statsRoutes } from './routes/stats.ts';
 import { searchRoutes } from './routes/search.ts';
+import { registerAuth, isLoopback } from './routes/auth.ts';
 
 interface AppOptions {
   db?: DatabaseSync; fetch?: Fetch; logger?: boolean; production?: boolean;
   postersDir?: string; distDir?: string; backgroundHydration?: boolean;
   dailyBudget?: number; apiKey?: string; throttleMs?: number;
+  cookieSecure?: boolean; now?: () => number;
 }
 export function buildApp(options: AppOptions = {}) {
   const db = options.db ?? openDatabase();
   const repo = new FilmsRepo(db);
-  const app = Fastify({ logger: options.logger ?? false, ajv: { customOptions: { removeAdditional: false } } });
+  const app = Fastify({ logger: options.logger ?? false, trustProxy: address => isLoopback(address), ajv: { customOptions: { removeAdditional: false } } });
+  const now = options.now ?? Date.now;
+  const secure = options.cookieSecure ?? (process.env.COOKIE_SECURE === undefined
+    ? (options.production ?? process.env.NODE_ENV === 'production')
+    : process.env.COOKIE_SECURE === 'true');
+  registerAuth(app, { db, secure, now });
   const throttle = createThrottle(options.throttleMs ?? 1000);
   const omdb = new OmdbClient(db, { fetch: options.fetch, apiKey: options.apiKey, dailyBudget: options.dailyBudget, throttle });
   const wikidata = new WikidataClient(db, { fetch: options.fetch, throttle });

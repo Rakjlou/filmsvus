@@ -153,21 +153,12 @@ append_env() {
 
 install_app() {
   require_root
-  require_tools curl tar xz sha256sum openssl jq flock runuser install grep tail chown chmod mktemp mkdir mv rm ln
+  require_tools curl tar xz sha256sum jq flock runuser install grep tail chown chmod mktemp mkdir mv rm ln
   read_metadata
   read_version
-  [[ -f $CONFIG_DIR/nginx.conf ]] || fail 'Missing nginx.conf.'
-  local line include_found=false include_pattern='^[[:space:]]*include[[:space:]]+([^[:space:];]+)[[:space:]]*;'
-  while IFS= read -r line || [[ -n $line ]]; do
-    if [[ $line =~ $include_pattern && ${BASH_REMATCH[1]} == "$CONFIG_DIR/nginx.d/*.conf" ]]; then include_found=true; fi
-  done < "$CONFIG_DIR/nginx.conf"
-  [[ $include_found == true ]] || fail "nginx.conf must include $CONFIG_DIR/nginx.d/*.conf inside its server block."
-  [[ -s $CONFIG_DIR/htpasswd ]] ||
-    fail "Basic auth is required. Run: sudo bash $APP_ROOT/deploy/manage.sh set-password <user>"
-  id -u www-data >/dev/null 2>&1 || fail 'The nginx worker account www-data is missing.'
   validate_env_port
 
-  # Only mutate files after every preflight check, including auth and PORT.
+  # Only mutate files after every preflight check, including PORT.
   exec 9>"$CONFIG_DIR/.filmsvus-manage.lock"
   flock 9
   as_project _install-node
@@ -178,6 +169,7 @@ install_app() {
   chmod 0600 "$ENV_FILE"
   if [[ -s $ENV_FILE && -n $(tail -c 1 "$ENV_FILE") ]]; then printf '\n' >> "$ENV_FILE"; fi
   append_env NODE_ENV production
+  append_env COOKIE_SECURE true
   append_env PORT "$PORT"
   append_env DB_PATH "$APP_HOME/data/films.db"
   append_env POSTERS_DIR "$APP_HOME/data/posters"
@@ -186,16 +178,10 @@ install_app() {
   if [[ -z $(env_value OMDB_API_KEY) ]]; then
     printf 'Warning: OMDB_API_KEY is empty; search uses Wikidata only and OMDb hydration is unavailable.\n' >&2
   fi
-  chown root:www-data "$CONFIG_DIR/htpasswd"
-  chmod 0640 "$CONFIG_DIR/htpasswd"
-  # nginx must traverse these directories, including homes created with mode 0700.
-  # This grants traversal only; .env stays private and data stays mode 0700.
-  chmod o+x "$APP_HOME" "$CONFIG_DIR"
-  install -d -o root -g root -m 0755 "$CONFIG_DIR/nginx.d"
-  install -o root -g root -m 0644 /dev/stdin "$CONFIG_DIR/nginx.d/filmsvus-auth.conf" <<EOF
-auth_basic "Films vus";
-auth_basic_user_file $CONFIG_DIR/htpasswd;
-EOF
+  # nginx workers only reverse-proxy; the root master reads its configuration.
+  # Remove old Basic auth and the traversal permissions it needed.
+  rm -f -- "$CONFIG_DIR/nginx.d/filmsvus-auth.conf" "$CONFIG_DIR/htpasswd"
+  chmod o-x "$APP_HOME" "$CONFIG_DIR"
   install -o root -g root -m 0644 /dev/stdin "/etc/systemd/system/$PROJECT.service" <<EOF
 [Unit]
 Description=Films vus
@@ -224,6 +210,8 @@ EOF
   printf 'Installed for https://%s. Next steps:\n' "$DOMAIN"
   printf '  sudoedit %s  # set OMDB_API_KEY\n' "$ENV_FILE"
   printf '  Import your data (see deploy/DONNEES.md).\n'
+  printf "  sudo -u %s -H bash -c 'cd %s && ~/.local/bin/node --env-file=%s scripts/user.ts add fleur'\n" "$PROJECT" "$APP_ROOT" "$ENV_FILE"
+  printf "  sudo -u %s -H bash -c 'cd %s && ~/.local/bin/node --env-file=%s scripts/user.ts add noe'\n" "$PROJECT" "$APP_ROOT" "$ENV_FILE"
   printf '  sudo nginx-site start %s\n' "$PROJECT"
 }
 
@@ -243,52 +231,14 @@ check_app() {
 
 status_app() {
   require_project
-  require_tools curl jq du
+  require_tools du
   read_metadata
   printf 'Node: '
   "$APP_HOME/.local/bin/node" --version
   du -sh -- "$APP_HOME/data"
-  curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$PORT/api/omdb/budget" | jq .
+  cd -- "$APP_ROOT"
+  "$APP_HOME/.local/bin/node" --env-file="$ENV_FILE" scripts/budget.ts
 }
-
-set_password() (
-  require_root
-  require_tools openssl flock mktemp chown chmod mv rm
-  local username=${1:-} password='' repeated='' hash temporary=''
-  [[ $username =~ ^[A-Za-z0-9._-]{1,32}$ ]] || fail 'Username must contain 1-32 letters, digits, dots, underscores or hyphens.'
-  [[ -d $CONFIG_DIR ]] || fail 'Missing config directory; create the site with nginx-site first.'
-  if [[ -t 0 ]]; then
-    IFS= read -rsp 'Password: ' password || fail 'Could not read password.'
-    printf '\n' >&2
-    IFS= read -rsp 'Repeat password: ' repeated || fail 'Could not read repeated password.'
-    printf '\n' >&2
-    [[ $password == "$repeated" ]] || fail 'Passwords do not match.'
-  else
-    IFS= read -r password || true
-  fi
-  [[ -n $password ]] || fail 'Empty passwords are not allowed.'
-  hash=$(printf '%s\n' "$password" | openssl passwd -apr1 -stdin)
-  unset password repeated
-  [[ $hash == '$apr1$'* && $hash != *$'\n'* ]] || fail 'Password hashing failed.'
-  umask 077
-  exec 9>"$CONFIG_DIR/.filmsvus-manage.lock"
-  flock 9
-  trap '[[ -z $temporary ]] || rm -f -- "$temporary"' EXIT
-  temporary=$(mktemp "$CONFIG_DIR/.htpasswd.XXXXXX")
-  if [[ -f $CONFIG_DIR/htpasswd ]]; then
-    local line
-    while IFS= read -r line || [[ -n $line ]]; do
-      [[ ${line%%:*} == "$username" ]] || printf '%s\n' "$line" >> "$temporary"
-    done < "$CONFIG_DIR/htpasswd"
-  fi
-  printf '%s:%s\n' "$username" "$hash" >> "$temporary"
-  chown root:www-data "$temporary"
-  chmod 0640 "$temporary"
-  mv -f -- "$temporary" "$CONFIG_DIR/htpasswd"
-  temporary=''
-  chmod o+x "$APP_HOME" "$CONFIG_DIR"
-  printf 'Password saved for %s. If the site is running: sudo systemctl reload nginx\n' "$username"
-)
 
 require_service_stopped() {
   local state
@@ -390,14 +340,14 @@ import_data() (
 )
 
 usage() {
-  printf 'Usage: bash deploy/manage.sh {install|update|check|status|set-password <user>|import-data <archive.tar.gz>}\n' >&2
+  printf 'Usage: bash deploy/manage.sh {install|update|check|status|import-data <archive.tar.gz>}\n' >&2
 }
 
 main() {
   local command=${1:-}
   case $command in
     install|update|check|status|_install-node|_build) [[ $# -eq 1 ]] || { usage; return 1; } ;;
-    set-password|import-data) [[ $# -eq 2 ]] || { usage; return 1; } ;;
+    import-data) [[ $# -eq 2 ]] || { usage; return 1; } ;;
     *) usage; return 1 ;;
   esac
   init_paths
@@ -405,7 +355,6 @@ main() {
     install|update) install_app ;;
     check) check_app ;;
     status) status_app ;;
-    set-password) set_password "$2" ;;
     import-data) import_data "$2" ;;
     _install-node) install_node ;;
     _build) build_app ;;

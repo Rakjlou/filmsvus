@@ -1,4 +1,5 @@
 const paths = {
+  account: 'M20 21v-2a7 7 0 0 0-14 0v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8',
   film: 'M4 3h16v18H4zM8 3v18M16 3v18M4 8h4M4 16h4M16 8h4M16 16h4',
   plus: 'M12 5v14M5 12h14',
   stats: 'M4 20V10M12 20V4M20 20v-7',

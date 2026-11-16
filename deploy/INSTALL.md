@@ -6,7 +6,7 @@
 
    ```bash
    sudo apt-get update
-   sudo apt-get install jq curl xz-utils openssl
+   sudo apt-get install jq curl xz-utils
    ```
 
    Aucun Node global n'est nécessaire : le hook installe la version de
@@ -46,21 +46,7 @@
    `nginx-site.json` active les hooks gérés ; le hook remplace l'unité systemd
    initiale. Garder le service arrêté jusqu'à la fin de l'installation.
 
-4. **Créer les accès nginx** (mot de passe saisi deux fois, sans affichage) :
-
-   ```bash
-   sudo bash /home/filmsvus/site/deploy/manage.sh set-password fleur
-   sudo bash /home/filmsvus/site/deploy/manage.sh set-password noe
-   ```
-
-   L'authentification Basic est obligatoire : l'installation refuse un fichier
-   de mots de passe absent ou vide. Les hashes APR1 sont dans
-   `config/htpasswd`, propriété de `root:www-data`, mode `0640`. Le script permet
-   à nginx de traverser le home et `config/` ; `.env` reste privé (`0600`) et
-   `data/` reste privé (`0700`). Rejouer la commande pour changer un mot de passe,
-   puis `sudo systemctl reload nginx` si le site fonctionne déjà.
-
-5. **Installer**, après inspection de la simulation :
+4. **Installer**, après inspection de la simulation :
 
    ```bash
    sudo nginx-site install filmsvus --dry-run
@@ -75,10 +61,33 @@
    affiches vivent dans `/home/filmsvus/data/`, hors du checkout. Le build Vite
    s'exécute sans typecheck sur le VPS ; les trois contrôles locaux restent
    requis avant chaque commit. Les hooks ne démarrent aucun service.
+   `COOKIE_SECURE=true` est ajouté si absent : les cookies de connexion sont
+   transmis uniquement en HTTPS. nginx doit remplacer `X-Forwarded-For` par
+   `$remote_addr` ; seuls les proxys loopback sont reconnus par Fastify. Le
+   header `Host` doit conserver le domaine public (ou `X-Forwarded-Host` doit
+   le fournir). Les workers nginx font uniquement du reverse proxy : ils n'ont
+   plus besoin de traverser le home ni `config/`. Le master nginx, root, lit
+   la configuration ; le hook retire l'ancien droit de traversée pour les autres.
 
-6. **Importer les données locales.** Suivre [DONNEES.md](DONNEES.md) pour
+5. **Importer les données locales.** Suivre [DONNEES.md](DONNEES.md) pour
    l'export, le transfert et l'import manuel, avant le premier démarrage.
    Ce guide couvre aussi les sauvegardes et le retour arrière.
+
+6. **Créer les comptes de l'application**, après l'installation et l'import :
+
+   ```bash
+   sudo -u filmsvus -H bash -c 'cd /home/filmsvus/site && ~/.local/bin/node --env-file=/home/filmsvus/config/.env scripts/user.ts add fleur'
+   sudo -u filmsvus -H bash -c 'cd /home/filmsvus/site && ~/.local/bin/node --env-file=/home/filmsvus/config/.env scripts/user.ts add noe'
+   ```
+
+   Le service peut être arrêté ou en cours d'exécution. Le mot de passe, d'au
+   moins 10 caractères, est saisi deux fois sans affichage et n'est jamais passé
+   en argument. Les identifiants utilisent 2 à 32 lettres ASCII, chiffres,
+   points, tirets ou underscores ; la casse est ignorée. Remplacer `add` par
+   `passwd` pour changer le mot de passe, `remove` pour supprimer un compte,
+   ou utiliser `list` sans nom. `passwd` et `remove` révoquent ses sessions.
+   Il n'y a ni inscription publique ni rôles. Les sessions durent 30 jours et
+   sont renouvelées lorsqu'il reste moins de 15 jours.
 
 7. **Démarrer et contrôler** :
 
@@ -89,11 +98,12 @@
    sudo nginx-site logs filmsvus --follow
    ```
 
-   Ouvrir `https://filmsvus.nsierra.dev` et vérifier la demande d'identifiants.
-   L'application écoute uniquement sur `127.0.0.1` ; nginx fournit HTTPS et
-   l'authentification. `check` teste directement l'API et la SPA sur le port local,
-   sans mot de passe nginx. `status` affiche Node, la taille des données et le
-   budget OMDb.
+   Ouvrir `https://filmsvus.nsierra.dev` : liste, fiches (souvenirs inclus) et
+   statistiques sont publiques. Vérifier que l'ajout et l'édition exigent une
+   connexion, puis se connecter depuis `/connexion`. L'application écoute
+   uniquement sur `127.0.0.1` ; nginx fournit HTTPS. `check` teste directement
+   l'API publique et la SPA sur le port local. `status` affiche Node, la taille
+   des données et le budget OMDb lu localement en base, sans appel réseau.
 
 8. **Mettre à jour**, après les contrôles locaux et le commit :
 
@@ -120,3 +130,24 @@
 
    Cette commande peut tourner pendant le service : SQLite utilise WAL et
    `busy_timeout`, et le budget OMDb est partagé dans la même base.
+
+## Passage de la basic auth à la connexion
+
+Après les contrôles locaux et le commit :
+
+```bash
+# Sur la machine locale
+git push
+# Sur le VPS
+sudo nginx-site update filmsvus
+sudo -u filmsvus -H bash -c 'cd /home/filmsvus/site && ~/.local/bin/node --env-file=/home/filmsvus/config/.env scripts/user.ts add fleur'
+sudo -u filmsvus -H bash -c 'cd /home/filmsvus/site && ~/.local/bin/node --env-file=/home/filmsvus/config/.env scripts/user.ts add noe'
+```
+
+Le hook retire `config/nginx.d/filmsvus-auth.conf` et `config/htpasswd` ; nginx-site
+recharge nginx après le démarrage de l'application. La base migre automatiquement
+en v3 au démarrage ou via la CLI. Entre la mise à jour et la création des comptes,
+le site est public en lecture seule et personne ne peut éditer : cette transition
+est sûre. Vérifier dans une fenêtre déconnectée que liste, fiches et statistiques
+restent lisibles, que recherche/ajout/édition exigent une connexion, puis tester
+la connexion et la déconnexion avec les deux comptes.

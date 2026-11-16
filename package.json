@@ -12,11 +12,14 @@
     "import:xlsx": "node --env-file-if-exists=.env scripts/import-xlsx.ts",
     "hydrate": "node --env-file-if-exists=.env scripts/hydrate.ts",
     "export:data": "node --env-file-if-exists=.env scripts/export-data.ts",
+    "user": "node --env-file-if-exists=.env scripts/user.ts",
     "test": "node --test --test-isolation=none tests/*.test.ts",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json",
     "build": "npm run typecheck && vite build --config vite.config.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/rate-limit": "11.2.2",
     "@fastify/static": "^10.1.10",
     "exceljs": "^4.4.0",
     "fastify": "^5.6.0",

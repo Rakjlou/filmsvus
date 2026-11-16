@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
+export const sessionExpiredMessage = 'Votre session a expiré, reconnectez-vous.';
+
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -13,10 +15,17 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
-    throw new Error(response.status === 429
+    const authRequest = path.startsWith('/auth/');
+    if (response.status === 401 && !authRequest) {
+      window.dispatchEvent(new Event('filmsvus-session-expired'));
+      throw new Error(sessionExpiredMessage);
+    }
+    const errorMessage = body.error === 'BudgetExceeded'
       ? 'Le budget OMDb du jour est atteint. Vos données sont conservées ; réessayez demain.'
-      : body.error === 'Validation' ? 'Vérifiez les champs : le titre, la date, les notes et les liens doivent être valides.'
-      : body.message ?? `La requête a échoué (${response.status}).`);
+      : body.error === 'Validation' ? authRequest ? 'Vérifiez votre identifiant et votre mot de passe.'
+        : 'Vérifiez les champs : le titre, la date, les notes et les liens doivent être valides.'
+      : body.message ?? `La requête a échoué (${response.status}).`;
+    throw new Error(errorMessage);
   }
   return response.status === 204 ? undefined as T : await response.json() as T;
 }

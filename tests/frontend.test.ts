@@ -8,6 +8,35 @@ import { stepRating } from '../web/rating.ts';
 import { displayTitles } from '../web/titles.ts';
 import { candidateSelection, normalizeCandidate } from '../web/search.ts';
 import { dansMaPeau, knivesOut } from './fixtures/wikidata.ts';
+import { safeNext } from '../web/authNavigation.ts';
+import { api, json, message } from '../web/api.ts';
+
+test('connexion : retour interne uniquement, y compris URLs trompeuses', () => {
+  for (const path of [null, '', 'https://evil.example', '//evil.example', '/\\evil.example', '/\n/evil.example']) assert.equal(safeNext(path), '/');
+  for (const path of ['/ajouter', '/film/42?x=1#notes', '/?sort=title&dir=asc']) assert.equal(safeNext(path), path);
+});
+
+test('client API : 401 invalide la session, erreur française et message 429 de connexion conservé', async t => {
+  const previousFetch = globalThis.fetch, previousWindow = globalThis.window;
+  const events = new EventTarget();
+  globalThis.window = events as unknown as Window & typeof globalThis;
+  t.after(() => { globalThis.fetch = previousFetch; globalThis.window = previousWindow; });
+  let expired = 0;
+  events.addEventListener('filmsvus-session-expired', () => expired++);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Unauthorized', message: 'Connexion requise' }), { status: 401 });
+  await assert.rejects(api('/films/1', json('PATCH', { comment: 'Souvenir' })), /Votre session a expiré, reconnectez-vous/);
+  assert.equal(expired, 1);
+  await assert.rejects(api('/auth/login', json('POST', { username: 'test', password: 'incorrect' })), /Connexion requise/);
+  assert.equal(expired, 1);
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Trop de tentatives de connexion. Réessayez dans 15 minutes.' }), { status: 429 });
+  await assert.rejects(api('/auth/login', json('POST', {})), /15 minutes/);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'BudgetExceeded', message: 'Budget OMDb quotidien atteint' }), { status: 429 });
+  await assert.rejects(api('/search?q=Film'), /budget OMDb du jour/);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Validation', message: 'body must have required property' }), { status: 400 });
+  await assert.rejects(api('/auth/login', json('POST', {})), /identifiant et votre mot de passe/);
+  await assert.rejects(api('/films', json('POST', {})), /Vérifiez les champs/);
+  assert.equal(message(new Error('Erreur')), 'Erreur');
+});
 
 test('titres affichés : original latin, français discret, original non latin et normalisation', () => {
   for (const [film, expected] of [

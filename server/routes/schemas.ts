@@ -1,3 +1,13 @@
+import { usernamePattern } from '../services/users.ts';
+
+export const loginBody = {
+  type: 'object', required: ['username', 'password'], additionalProperties: false,
+  properties: {
+    username: { type: 'string', pattern: usernamePattern.source },
+    password: { type: 'string', minLength: 1, maxLength: 1024 },
+  },
+};
+
 const nullableText = { type: ['string', 'null'], maxLength: 50_000 };
 const strings = { type: 'array', items: { type: 'string', minLength: 1, maxLength: 200 }, maxItems: 100, uniqueItems: true };
 const positiveId = { type: 'integer', minimum: 1 };

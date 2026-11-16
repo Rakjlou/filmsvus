@@ -29,6 +29,7 @@ les affiches `data/posters/` et `.env` sont ignorés par Git.
 | `npm run import:xlsx` | Import idempotent, clé titre + date ; résumé en sortie |
 | `npm run hydrate -- --limit 20` | Enrichissement par lots, environ un appel/s |
 | `npm run export:data -- --out data/export` | Archive cohérente de la base et des affiches ; [transfert et sauvegardes](deploy/DONNEES.md) |
+| `npm run user -- add <nom>` | Créer un compte local ; `passwd <nom>`, `remove <nom>`, `list` pour le gérer |
 | `npm test` | Tests `node:test`, SQLite temporaire, réseau entièrement simulé |
 | `npm run typecheck` | Vérification TypeScript stricte du serveur, des scripts, tests et de `web/` |
 | `npm run build` | Typecheck puis build Vite de la SPA dans `dist/` |
@@ -38,7 +39,31 @@ Pour la production : `npm run build`, puis `npm start`, et ouvrir l’adresse Fa
 direct à `/film/42`, `/ajouter` ou `/stats` fonctionne aussi après rechargement.
 `/posters/*` sert les affiches locales dans les deux modes.
 
-Le frontend utilise React 19, React Router, Vite 8 et du CSS natif, avec quatre pages :
+La lecture est publique : liste, notes, fiches (résumé personnel et commentaire
+inclus) et statistiques. Pour ajouter, modifier, rechercher un candidat ou
+enrichir, se connecter sur `/connexion`. En développement aussi, créer d'abord
+un compte local avec `npm run user -- add noe`. Il n'y a ni inscription ni rôles.
+Les identifiants acceptent 2 à 32 lettres ASCII, chiffres, points, tirets ou
+underscores, sans distinction de casse. Les mots de passe ont au moins
+10 caractères : la CLI les demande deux fois sans écho (une ligne depuis stdin
+hors TTY), jamais en argument. `passwd` et `remove` révoquent les sessions.
+Ne jamais commiter de mots de passe ; les tests génèrent leurs propres comptes.
+
+Les mots de passe sont hashés avec scrypt asynchrone ; seuls les hashes SHA-256
+des jetons de session sont stockés. `@fastify/cookie` lit et écrit le cookie
+non signé HttpOnly, SameSite=Lax, qui expire après 30 jours et se renouvelle
+lorsqu'il reste moins de 15 jours. `Secure`
+est actif par défaut en production (`--production` ou `NODE_ENV=production`),
+inactif en développement HTTP ; `COOKIE_SECURE=true/false` permet de le régler.
+Un Origin dont l'hôte diffère de celui du site est refusé pour les mutations. Fastify ne
+fait confiance qu'aux proxys loopback ; nginx remplace `X-Forwarded-For` par
+`$remote_addr` et conserve le domaine public dans `Host` ou `X-Forwarded-Host`.
+`@fastify/rate-limit` limite uniquement `POST /api/auth/login` à 10 requêtes par
+IP (`request.ip`) sur 15 minutes, succès et requêtes invalides compris, sans
+limite par identifiant. Les compteurs sont en mémoire et réinitialisés au
+redémarrage ; un dépassement répond 429 avec un message en français.
+
+Le frontend utilise React 19, React Router, Vite 8 et du CSS natif :
 
 - `/` : affiches ou lignes compactes ; recherche dans titres, réalisateurs, résumés,
   commentaires et générique ; tous les tris et filtres sont dans l’URL et combinables.
@@ -55,6 +80,8 @@ Le frontend utilise React 19, React Router, Vite 8 et du CSS natif, avec quatre 
 - `/stats` : indicateurs, années/mois, distributions par personne, classements,
   réalisateurs, genres, décennies, nuage IMDb à partir de 3 films comparables et
   taux d’enrichissement. SVG maison avec tableaux de données accessibles.
+- `/connexion` : connexion, compte connecté et déconnexion. L'ajout redirige
+  ici si nécessaire ; `?next=` permet de retrouver la page interne demandée.
 
 L’interface française est conçue d’abord pour 390 px, avec navigation basse mobile,
 navigation haute desktop et filtres en volet modal. Le thème suit les préférences
@@ -110,11 +137,20 @@ Le synopsis personnel prime sur le synopsis français de Wikipédia, puis sur ce
 d'OMDb en anglais. Wikipédia est mis en cache séparément, sans quota OMDb ; une
 indisponibilité du synopsis français n'interrompt jamais l'enrichissement.
 
-API : `GET/POST /api/films`, `GET/PATCH/DELETE /api/films/:id`,
+API publique : `GET /api/films`, `GET /api/films/:id`, `GET /api/tags`,
+`GET /api/viewers`, `GET /api/stats`, `GET /api/auth/me` (utilisateur ou null),
+ainsi que leurs variantes HEAD. `POST /api/auth/login` (`{username,password}`)
+et `POST /api/auth/logout` sont accessibles sans session ; toutes les réponses
+`/api/auth/*` portent `Cache-Control: no-store`.
+
+API avec session : `GET /api/search?q=`, `GET /api/omdb/budget` (HEAD aussi),
+`POST /api/films`, `PATCH/DELETE /api/films/:id`,
 `PUT /api/films/:id/ratings` (`{"ratings":[{"viewer_id":1,"score":8}]}`),
 `PUT /api/films/:id/tags` (`{"tag_ids":[1]}`), `POST /api/films/:id/hydrate`,
-`GET /api/search?q=`, `GET/POST /api/tags`, `GET /api/viewers`, `GET /api/stats`,
-`GET /api/omdb/budget`. La liste inclut notes, moyenne/écart, tags, crew et métadonnées
+`POST /api/tags`. Un unique hook `onRequest` installé par `registerAuth` protège par défaut
+toute mutation `/api/*`, y compris future, sauf login/logout. Sans session valide,
+il répond 401 ; un Origin présent dont l'hôte diffère répond 403.
+La liste inclut notes, moyenne/écart, tags, crew et métadonnées
 en un seul payload, sans les gros JSON bruts (disponibles sur la fiche).
 
 Le schéma suit `PRAGMA user_version` ; `needs_review` stocke les résolutions à vérifier
@@ -122,10 +158,13 @@ et `api_log.raw_response` permet le cache durable prévu par le plan.
 À l'ouverture, une base v1 migre automatiquement vers v2 dans une transaction :
 suppression des spectateurs non core et de leurs notes, normalisation des scores,
 contrainte entière 0–10, retrait de l'ancien lien externe et ajout de `plot_fr`.
-Une base neuve atteint le même schéma ; une version supérieure à 2 est refusée.
+La migration v3 ajoute `users` et `sessions`, sans modifier les films. Une base
+neuve atteint le même schéma ; une version supérieure à 3 est refusée.
+Le test du vrai classeur lit `data/source/filmsvus.xlsx` en lecture seule.
 
 ## Déploiement
 
 Le [guide de déploiement](deploy/INSTALL.md) décrit l'installation sur Debian avec
 nginx-site ≥ 1.1 : Node local au projet, systemd, données hors du checkout et
-authentification Basic obligatoire dans nginx.
+lecture publique et connexion applicative pour l'édition. Le hook retire
+l'ancienne basic auth nginx ; les comptes se créent avec la CLI après l'import.

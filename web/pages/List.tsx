@@ -1,3 +1,4 @@
+import { useAuth } from '../auth.tsx';
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import type { Film } from '../types.ts';
@@ -9,6 +10,7 @@ import { Icon } from '../components/Icon.tsx';
 import { Empty, ErrorMessage, Loading } from '../components/Feedback.tsx';
 
 export function ListPage() {
+  const { canEdit } = useAuth();
   const { data: films, error, loading, reload } = useResource<Film[]>('/films');
   const [params, setParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -28,7 +30,7 @@ export function ListPage() {
       {error && <ErrorMessage retry={reload}>{error}</ErrorMessage>}
       {loading && <Loading />}
       {!loading && !error && (results.length ? rows ? <><div className="film-row-heading" aria-hidden="true">{['Date', 'Titre', 'Réalisation', 'Fleur', 'Noé', 'Moy.', 'Écart', 'IMDb'].map(label => <span key={label}>{label}</span>)}</div><ul className="film-rows">{results.map(film => <FilmRow key={film.id} film={film} returnTo={returnTo} sortByGap={params.get('sort') === 'gap'} />)}</ul></> : <div className="film-grid">{results.map(film => <FilmCard key={film.id} film={film} returnTo={returnTo} />)}</div>
-        : <Empty title={films?.length ? 'Aucun film dans ce cadre.' : 'La première séance vous attend.'}>{films?.length ? <button type="button" onClick={() => setParams({})}>Effacer la recherche et les filtres</button> : <><p>Un film, deux regards. Commencez votre collection.</p><Link className="button primary" to="/ajouter"><Icon name="plus" /> Ajouter un film</Link></>}</Empty>)}
+        : <Empty title={films?.length ? 'Aucun film dans ce cadre.' : 'La première séance vous attend.'}>{films?.length ? <button type="button" onClick={() => setParams({})}>Effacer la recherche et les filtres</button> : <><p>Un film, deux regards.</p>{canEdit && <Link className="button primary" to="/ajouter"><Icon name="plus" /> Ajouter un film</Link>}</>}</Empty>)}
     </section>
     {filtersOpen && <FilterSheet films={films ?? []} params={params} update={next => setParams(next, { replace: true })} close={() => setFiltersOpen(false)} count={results.length} />}
   </>;

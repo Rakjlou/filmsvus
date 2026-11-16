@@ -461,3 +461,15 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Account controls stay compact in the mobile header. */
+.account-control { margin-left: auto; flex-shrink: 0; }
+.account-control + .theme-toggle { margin-left: 0; }
+.login-page { max-width: 560px; margin: auto; }
+.login-page .notice { margin-top: 20px; }
+.session-notice { position: fixed; z-index: 30; bottom: 88px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); box-shadow: var(--shadow); }
+.session-notice .button { margin-top: 10px; }
+@media (min-width: 1024px) {
+  .account-control { margin-left: 0; }
+  .session-notice { bottom: 24px; }
+}

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-export const SUPPORTED_DB_VERSION = 2;
+export const SUPPORTED_DB_VERSION = 3;
 
 export function transaction<T>(db: DatabaseSync, work: () => T): T {
   db.exec('BEGIN IMMEDIATE');
@@ -41,6 +41,24 @@ export function migrate(db: DatabaseSync): void {
       ALTER TABLE films DROP COLUMN letterboxd_url;
       ALTER TABLE films ADD COLUMN plot_fr TEXT;
       PRAGMA user_version = 2;
+    `);
+  });
+  if (version < 3) transaction(db, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+      PRAGMA user_version = 3;
     `);
   });
 }

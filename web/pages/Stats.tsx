@@ -1,3 +1,4 @@
+import { useAuth } from '../auth.tsx';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { Stats } from '../types.ts';
@@ -12,6 +13,7 @@ function Ranking({ title, films, gap = false }: { title: string; films: Rank; ga
   return <section className="surface ranking"><h2>{title}</h2>{films.length ? <ol>{films.slice(0, 5).map((film, index) => <li key={film.id}><Link to={`/film/${film.id}`}><span className="rank-position">{String(index + 1).padStart(2, '0')}</span><span className="rank-title">{film.title}</span>{gap ? <span className="gap-value">{number(film.gap)}<small> pts</small></span> : <Score value={film.avg} small />}</Link></li>)}</ol> : <p className="hint">Les premières notes écriront ce classement.</p>}</section>;
 }
 export function StatsPage() {
+  const { canEdit } = useAuth();
   const resource = useResource<Stats>('/stats');
   const stats = resource.data;
   const currentYear = new Intl.DateTimeFormat('fr-FR', { year: 'numeric', timeZone: 'Europe/Paris' }).format(new Date());
@@ -21,7 +23,7 @@ export function StatsPage() {
   return <>
     <header className="page-heading"><p className="eyebrow">Le cinéma, à deux</p><h1>Nos séances, <em>en chiffres.</em></h1><p className="lead">Des habitudes, des coups de cœur et quelques désaccords.</p></header>
     {resource.loading && <Loading />}{resource.error && <ErrorMessage retry={resource.reload}>{resource.error}</ErrorMessage>}
-    {stats && (!stats.total ? <Empty title="Le début d’une belle série."><p>Ajoutez votre première séance pour voir vos statistiques.</p><Link className="button primary" to="/ajouter">Ajouter un film</Link></Empty> : <>
+    {stats && (!stats.total ? <Empty title="Le début d’une belle série."><p>Les statistiques apparaîtront avec les premières séances.</p>{canEdit && <Link className="button primary" to="/ajouter">Ajouter un film</Link>}</Empty> : <>
       <div className="kpi-grid"><div className="kpi"><span>Films vus</span><strong>{number(stats.total, 0)}</strong><small>{stats.rated} avec une note du couple</small></div><div className="kpi"><span>Notre moyenne</span><strong><Score value={stats.avg} /></strong><small>Les notes du couple uniquement</small></div>{stats.viewers.map(v => <div className="kpi" key={v.id}><span>Moyenne {v.name}</span><strong><Score value={v.avg} /></strong><small>{v.count} film{v.count > 1 ? 's' : ''} noté{v.count > 1 ? 's' : ''}</small></div>)}</div>
       <div className="stats-grid"><section className="surface"><div className="section-heading"><div><p className="eyebrow">Au fil du temps</p><h2>Une année après l’autre</h2></div></div><BarChart title="Films vus par année" data={Object.entries(stats.films_by_year).sort(([a], [b]) => a.localeCompare(b)).map(([label, value]) => ({ label, value }))} /></section>
         <section className="surface"><div className="section-heading"><div><p className="eyebrow">Le rythme des séances</p><h2>Mois par mois</h2></div><label className="chart-select"><span className="sr-only">Année du graphique mensuel</span><select value={year} onChange={e => setYear(e.target.value)}>{[...new Set([currentYear, ...Object.keys(stats.films_by_year)])].sort().reverse().map(y => <option key={y}>{y}</option>)}</select></label></div><BarChart title={`Films vus par mois en ${year}`} data={Array.from({ length: 12 }, (_, i) => ({ label: ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'][i]!, value: stats.films_by_month[`${year}-${String(i + 1).padStart(2, '0')}`] ?? 0 }))} /></section>

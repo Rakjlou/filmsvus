@@ -2,20 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tempDb, tempDir, offline, json } from './helpers.ts';
-import { buildApp } from '../server/index.ts';
+import { tempDb, tempDir, json, testApp } from './helpers.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
 
 test('API notes : rejette les valeurs hors bornes et décimales, accepte zéro, dix et absence', async t => {
-  const db = tempDb(t), repo = new FilmsRepo(db), film = repo.create({ title: 'Notes' });
-  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
+  const { app, repo, authed } = testApp(t), film = repo.create({ title: 'Notes' });
   for (const score of [-1, 11, 6.5, 0, 10, null]) {
     const ratings = [{ viewer_id: 1, score }], status = score === null || score === 0 || score === 10 ? 200 : 400;
     for (const method of ['PUT', 'PATCH', 'POST'] as const) {
       const url = method === 'POST' ? '/api/films' : `/api/films/${film.id}${method === 'PUT' ? '/ratings' : ''}`;
       const payload = method === 'POST' ? { title: `Score ${score}`, ratings } : { ratings };
-      const response = await app.inject({ method, url, payload });
+      const response = await authed({ method, url, payload });
       assert.equal(response.statusCode, method === 'POST' && status === 200 ? 201 : status, response.body);
       if (status === 200) assert.equal(response.json().ratings[0].score, score);
     }
@@ -30,12 +27,10 @@ test('API notes : rejette les valeurs hors bornes et décimales, accepte zéro, 
 });
 
 test('API : spectateurs et notes limités aux core même avec une ligne non core résiduelle', async t => {
-  const db = tempDb(t), repo = new FilmsRepo(db);
+  const { app, db, repo } = testApp(t);
   const film = repo.create({ title: 'Core', ratings: [{ viewer_id: 1, score: 8 }, { viewer_id: 2, score: 7 }] });
   db.exec("INSERT INTO viewers(id,name,is_core) VALUES (3,'Autre',0)");
   db.prepare('INSERT INTO ratings VALUES (?,3,0)').run(film.id);
-  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
   assert.equal((await app.inject('/api/viewers')).json().length, 2);
   const result = (await app.inject(`/api/films/${film.id}`)).json();
   assert.equal(result.ratings.length, 2); assert.equal(result.avg, 7.5); assert.equal(result.gap, 1);
@@ -44,12 +39,10 @@ test('API : spectateurs et notes limités aux core même avec une ligne non core
 });
 
 test('API films : CRUD, notes du couple, tags, payload liste complet et cascade', async t => {
-  const db = tempDb(t), repo = new FilmsRepo(db);
-  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
+  const { app, db, repo, authed } = testApp(t);
   assert.equal((await app.inject('/api/viewers')).json().length, 2);
   assert.equal((await app.inject('/api/tags')).json()[0].label, '+1');
-  const create = await app.inject({ method: 'POST', url: '/api/films', payload: {
+  const create = await authed({ method: 'POST', url: '/api/films', payload: {
     title: 'Mon film', watched_at: '2026-11-11T12:00:00Z', director_text: 'Réalisatrice',
     summary: 'Résumé', comment: 'Commentaire', genres: ['Drama'], year: 2000, runtime_min: 90,
     imdb_id: 'https://www.imdb.com/title/tt1234567/?ref_=abc',
@@ -73,24 +66,22 @@ test('API films : CRUD, notes du couple, tags, payload liste complet et cascade'
   assert.equal(list[0].omdb_raw, undefined); assert.equal(list[0].wikidata_raw, undefined);
   const get = await app.inject(url); assert.equal(get.statusCode, 200);
   assert.ok(get.json().omdb_raw);
-  const patch = await app.inject({ method: 'PATCH', url, payload: { comment: 'Modifié', year: 2001 } });
+  const patch = await authed({ method: 'PATCH', url, payload: { comment: 'Modifié', year: 2001 } });
   assert.equal(patch.statusCode, 200); assert.equal(patch.json().comment, 'Modifié');
-  const ratings = await app.inject({ method: 'PUT', url: `${url}/ratings`, payload: { ratings: [{ viewer_id: 1, score: null }] } });
+  const ratings = await authed({ method: 'PUT', url: `${url}/ratings`, payload: { ratings: [{ viewer_id: 1, score: null }] } });
   assert.equal(ratings.statusCode, 200); assert.equal(ratings.json().avg, 5); assert.equal(ratings.json().gap, null);
-  const tag = await app.inject({ method: 'POST', url: '/api/tags', payload: { label: 'Soirée', emoji: '🎬', color: '#123abc' } });
+  const tag = await authed({ method: 'POST', url: '/api/tags', payload: { label: 'Soirée', emoji: '🎬', color: '#123abc' } });
   assert.equal(tag.statusCode, 201, tag.body);
-  assert.equal((await app.inject({ method: 'PUT', url: `${url}/tags`, payload: { tag_ids: [tag.json().id] } })).statusCode, 200);
+  assert.equal((await authed({ method: 'PUT', url: `${url}/tags`, payload: { tag_ids: [tag.json().id] } })).statusCode, 200);
   const stats = (await app.inject('/api/stats')).json(); assert.equal(stats.total, 1); assert.equal(stats.avg, 5);
   assert.equal(stats.hydrated, 1);
-  assert.equal((await app.inject({ method: 'DELETE', url })).statusCode, 204);
+  assert.equal((await authed({ method: 'DELETE', url })).statusCode, 204);
   assert.equal((await app.inject(url)).statusCode, 404);
   for (const table of ['ratings', 'credits', 'companies', 'film_tags']) assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n, 0);
 });
 
 test('API : schémas JSON, références, conflits, IMDb invalide et mise à jour atomique', async t => {
-  const db = tempDb(t);
-  const app = buildApp({ db, fetch: offline, backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
+  const { app, authed } = testApp(t);
   for (const payload of [{}, { title: '' }, { title: '  ' }, { title: 'X', unexpected: true },
     { title: 'X', watched_at: '2026-02-30' }, { title: 'X', year: 'nonsense' },
     { title: 'X', imdb_id: 'https://evil.example/title/tt1234567/' },
@@ -98,14 +89,14 @@ test('API : schémas JSON, références, conflits, IMDb invalide et mise à jour
     { title: 'X', ratings: [{ viewer_id: 999, score: 3 }] },
     { title: 'X', tag_ids: [999] },
     { title: 'X', credits: [{ role: 'composer', name: 'X', position: 0, source: 'wikidata' }] }]) {
-    const response = await app.inject({ method: 'POST', url: '/api/films', payload });
+    const response = await authed({ method: 'POST', url: '/api/films', payload });
     assert.equal(response.statusCode, 400, `${JSON.stringify(payload)} : ${response.body}`);
   }
   assert.deepEqual((await app.inject('/api/films')).json(), []);
   const valid = { title: 'Film', watched_at: '2026-11-11T12:00:00Z', ratings: [{ viewer_id: 1, score: 5 }], tag_ids: [1] };
-  const film = (await app.inject({ method: 'POST', url: '/api/films', payload: valid })).json();
-  assert.equal((await app.inject({ method: 'POST', url: '/api/films', payload: valid })).statusCode, 409);
-  const fail = await app.inject({ method: 'PATCH', url: `/api/films/${film.id}`, payload: { title: 'Modifié', tag_ids: [999] } });
+  const film = (await authed({ method: 'POST', url: '/api/films', payload: valid })).json();
+  assert.equal((await authed({ method: 'POST', url: '/api/films', payload: valid })).statusCode, 409);
+  const fail = await authed({ method: 'PATCH', url: `/api/films/${film.id}`, payload: { title: 'Modifié', tag_ids: [999] } });
   assert.equal(fail.statusCode, 400);
   const unchanged = (await app.inject(`/api/films/${film.id}`)).json();
   assert.equal(unchanged.title, 'Film'); assert.equal(unchanged.tags[0].id, 1);
@@ -115,16 +106,16 @@ test('API : schémas JSON, références, conflits, IMDb invalide et mise à jour
   for (const method of ['PATCH', 'PUT', 'DELETE'] as const) {
     const url = method === 'PUT' ? '/api/films/999/ratings' : '/api/films/999';
     const payload = method === 'PATCH' ? { title: 'X' } : method === 'PUT' ? { ratings: [] } : undefined;
-    assert.equal((await app.inject({ method, url, payload })).statusCode, 404);
+    assert.equal((await authed({ method, url, payload })).statusCode, 404);
   }
-  assert.equal((await app.inject({ method: 'PATCH', url: `/api/films/${film.id}`, payload: {} })).statusCode, 400);
-  assert.equal((await app.inject({ method: 'PUT', url: `/api/films/${film.id}/tags`, payload: { tag_ids: [1, 1] } })).statusCode, 400);
-  assert.equal((await app.inject({ method: 'POST', url: '/api/tags', payload: { label: '+1' } })).statusCode, 409);
-  assert.equal((await app.inject({ method: 'POST', url: '/api/tags', payload: { label: 'X', color: 'red' } })).statusCode, 400);
+  assert.equal((await authed({ method: 'PATCH', url: `/api/films/${film.id}`, payload: {} })).statusCode, 400);
+  assert.equal((await authed({ method: 'PUT', url: `/api/films/${film.id}/tags`, payload: { tag_ids: [1, 1] } })).statusCode, 400);
+  assert.equal((await authed({ method: 'POST', url: '/api/tags', payload: { label: '+1' } })).statusCode, 409);
+  assert.equal((await authed({ method: 'POST', url: '/api/tags', payload: { label: 'X', color: 'red' } })).statusCode, 400);
 });
 
 test('API recherche/budget/hydratation : fetch simulé, cache, quota HTTP 429, revue manuelle', async t => {
-  const db = tempDb(t); let calls = 0;
+  let calls = 0;
   const fetch: typeof globalThis.fetch = async input => {
     const url = new URL(String(input));
     if (url.hostname === 'www.wikidata.org') return json({ search: [] });
@@ -132,18 +123,17 @@ test('API recherche/budget/hydratation : fetch simulé, cache, quota HTTP 429, r
     if (url.searchParams.has('s')) return json({ Response: 'True', Search: [{ Title: 'Film', imdbID: 'tt1234567' }] });
     return json({ Response: 'False', Error: 'Movie not found!' });
   };
-  const app = buildApp({ db, fetch, apiKey: 'test-secret', dailyBudget: 2, throttleMs: 0, backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
-  assert.equal((await app.inject('/api/search')).statusCode, 400);
-  assert.equal((await app.inject('/api/search?q=%20%20')).statusCode, 400);
-  assert.equal((await app.inject('/api/search?q=Film')).json().Search.length, 1);
-  await app.inject('/api/search?q=Film'); assert.equal(calls, 1);
+  const { app, db, authed } = testApp(t, { fetch, apiKey: 'test-secret', dailyBudget: 2, throttleMs: 0 });
+  assert.equal((await authed({ url: '/api/search' })).statusCode, 400);
+  assert.equal((await authed({ url: '/api/search?q=%20%20' })).statusCode, 400);
+  assert.equal((await authed({ url: '/api/search?q=Film' })).json().Search.length, 1);
+  await authed({ url: '/api/search?q=Film' }); assert.equal(calls, 1);
   const film = new FilmsRepo(db).create({ title: 'Inconnu' });
-  const hydrated = await app.inject({ method: 'POST', url: `/api/films/${film.id}/hydrate` });
+  const hydrated = await authed({ method: 'POST', url: `/api/films/${film.id}/hydrate` });
   assert.equal(hydrated.statusCode, 200); assert.equal(hydrated.json().needs_review, true);
-  const budget = (await app.inject('/api/omdb/budget')).json();
+  const budget = (await authed({ url: '/api/omdb/budget' })).json();
   assert.equal(budget.used, 2); assert.equal(budget.remaining, 0); assert.equal(budget.timezone, 'Europe/Paris');
-  const exhausted = await app.inject('/api/search?q=Autre');
+  const exhausted = await authed({ url: '/api/search?q=Autre' });
   assert.equal(exhausted.statusCode, 429); assert.equal(exhausted.json().error, 'BudgetExceeded');
   assert.ok(!exhausted.body.includes('test-secret')); assert.equal(calls, 2);
 });
@@ -163,26 +153,25 @@ test('changement IMDb : métadonnées et hydratation invalidées, souvenirs et c
 });
 
 test('API ajout : hydratation en arrière-plan et attente propre à la fermeture', async t => {
-  const db = tempDb(t); let calls = 0;
-  const app = buildApp({ db, apiKey: 'test', throttleMs: 0, postersDir: tempDir(t),
+  let calls = 0;
+  const { app, db, authed } = testApp(t, { apiKey: 'test', throttleMs: 0, backgroundHydration: true,
     fetch: async input => {
       if (new URL(String(input)).hostname === 'www.wikidata.org') return json({ search: [] });
       calls++; return json({ Response: 'False', Error: 'Movie not found!' });
     } });
-  const response = await app.inject({ method: 'POST', url: '/api/films', payload: { title: 'Introuvable' } });
+  const response = await authed({ method: 'POST', url: '/api/films', payload: { title: 'Introuvable' } });
   assert.equal(response.statusCode, 201);
   await app.close();
   assert.equal(calls, 1); assert.equal(new FilmsRepo(db).get(response.json().id).needs_review, true);
 });
 
 test('fichiers statiques : affiches locales, build prod, fallback SPA et 404 API/assets', async t => {
-  const db = tempDb(t), directory = tempDir(t), posters = join(directory, 'posters'), dist = join(directory, 'dist');
+  const directory = tempDir(t), posters = join(directory, 'posters'), dist = join(directory, 'dist');
   mkdirSync(posters); mkdirSync(dist);
   writeFileSync(join(posters, 'tt1234567.jpg'), new Uint8Array([255, 216, 255, 217]));
   writeFileSync(join(dist, 'index.html'), '<html><body>Films vus</body></html>');
   writeFileSync(join(dist, 'app.js'), 'console.log("SPA");');
-  const app = buildApp({ db, fetch: offline, backgroundHydration: false, production: true, postersDir: posters, distDir: dist });
-  t.after(() => app.close());
+  const { app } = testApp(t, { production: true, postersDir: posters, distDir: dist });
   const poster = await app.inject('/posters/tt1234567.jpg');
   assert.equal(poster.statusCode, 200); assert.equal(poster.headers['content-type'], 'image/jpeg');
   assert.equal((await app.inject('/app.js')).statusCode, 200);

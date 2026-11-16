@@ -28,7 +28,7 @@ Le propriétaire veut une répartition stricte des rôles :
 
 ## Projet en bref
 
-Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet. C'est un MVP mobile-first, sans auth.
+Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet. MVP mobile-first, lecture publique et connexion requise pour éditer.
 
 - **Stack** : Node 26 (≥ 24), ESM, TypeScript exécuté nativement par Node (pas de build serveur, syntaxe effaçable uniquement : pas d'`enum`, imports en `.ts`). Fastify 5, SQLite via `node:sqlite`, React 19 + Vite + React Router dans `web/`, CSS natif. Pas de lib de graphiques : SVG fait main.
 - **Spécification validée** : `docs/PLAN.md`.
@@ -36,19 +36,33 @@ Carnet des films vus par un couple (Fleur & Noé), importé de leur Google Sheet
 
 Déploiement : application gérée par nginx-site ≥ 1.1 via `deploy/manage.sh` ; guide dans `deploy/INSTALL.md`.
 La version Node du VPS est fixée par `.node-version` ; données dans `/home/filmsvus/data/`, hors du checkout.
-L'authentification Basic nginx est obligatoire avant toute mise en service.
+La connexion applicative protège toutes les écritures, la recherche et le budget OMDb ; la basic auth nginx est retirée par les hooks de déploiement.
+Les cookies non signés sont gérés par `@fastify/cookie` (`request.cookies`, `reply.setCookie` / `reply.clearCookie`).
+`@fastify/rate-limit`, enregistré avec `global: false`, limite uniquement `POST /api/auth/login`
+à 10 requêtes par IP (`request.ip`) sur 15 minutes, toutes tentatives comprises, sans limite
+par identifiant ; réponse 429 en français au format `{error, message}`. Seuls les proxys loopback sont reconnus.
+Conserver `node:crypto` pour scrypt, les jetons aléatoires et les comparaisons à temps constant,
+ainsi que les sessions révocables en base (seul le SHA-256 du jeton est stocké).
 
 ### Commandes
 
 | Commande | Rôle |
 |---|---|
 | `npm run dev` | API Fastify **:3210** + Vite **:4200** (ouvrir 4200). Vite recharge le front ; **relancer après toute modif serveur**. |
+| `npm run user -- add <nom>` | Créer un compte local pour éditer ; `passwd <nom>`, `remove <nom>`, `list` pour gérer les comptes. |
 | `npm test` / `npm run typecheck` / `npm run build` | Doivent rester verts à chaque commit. |
 | `npm run import:xlsx` | Import idempotent de `data/source/filmsvus.xlsx` (feuille `Liste`). |
 | `npm run export:data [-- --out data/export]` | Archive cohérente base + affiches, horodatage UTC ; voir `deploy/DONNEES.md`. |
 | `npm run hydrate -- --limit N [--dry-run] [--id X]` | Enrichissement par lots. Saute les films déjà faits, s'arrête au budget. |
 
 ### Ports et environnement Windows
+
+En développement local, créer un compte avec `npm run user -- add <nom>` et se connecter sur `/connexion`
+pour éditer. Les tests créent leurs propres comptes générés en base temporaire,
+avec des hashes scrypt créés à coût réduit. Le test du vrai classeur lit
+`data/source/filmsvus.xlsx` en lecture seule.
+
+- Le proxy Vite doit conserver `changeOrigin: false` : le contrôle Origin de l’API compare `Origin` à `Host`.
 
 - **3000 est occupé par un service Windows (svchost) et 5141–5240 est réservé par Windows**, dont le 5173 de Vite. Les deux donnent `EACCES`. D'où le couple 3210 / 4200, à ne pas remettre par défaut.
 - Démarrer les serveurs exige de sortir du bac à sable (le propriétaire a déjà accepté). Un ancien `npm run dev` peut survivre comme process `node` orphelin : vérifier avec `netstat -ano | grep 3210` avant de relancer. Arrêter un `npm run dev` lancé en tâche de fond ne tue que le wrapper : tuer aussi le PID node qui écoute (`taskkill //PID <pid> //T //F` sous Git Bash).
@@ -77,6 +91,7 @@ L'authentification Basic nginx est obligatoire avant toute mise en service.
 ## Secrets
 
 - La clé OMDb est **uniquement dans `.env`**, qui est ignoré par git. Ne jamais l'écrire dans un fichier suivi, un log commité, une consigne copiée dans le repo ou une requête vers un service tiers autre qu'OMDb.
+- Ne jamais commiter de mots de passe. Les comptes (hashes scrypt) et sessions (hashes SHA-256) vivent en base v3 ; les archives de données doivent rester privées. Changer un mot de passe ou supprimer un compte révoque ses sessions.
 - Avant chaque commit : `grep -rl "<clé>" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist .` ne doit renvoyer que `./.env`.
 - User-Agent des appels externes : `filmsvus-local/0.1`, sans aucune info personnelle.
 

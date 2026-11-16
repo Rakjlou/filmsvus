@@ -8,7 +8,7 @@ export interface SearchCandidate {
 }
 
 export function searchRoutes(app: FastifyInstance, omdb: OmdbClient, wikidata: WikidataClient) {
-  app.get<{ Querystring: { q: string; source?: 'omdb' } }>('/api/search', { schema: { querystring: {
+  app.get<{ Querystring: { q: string; source?: 'omdb' } }>('/api/search', { config: { auth: 'required' }, schema: { querystring: {
     type: 'object', required: ['q'], additionalProperties: false,
     properties: { q: { type: 'string', minLength: 1, maxLength: 200, pattern: '\\S' }, source: { const: 'omdb' } },
   } } }, async request => {
@@ -31,5 +31,5 @@ export function searchRoutes(app: FastifyInstance, omdb: OmdbClient, wikidata: W
       poster: c.Poster && c.Poster !== 'N/A' ? c.Poster : null, source: 'omdb',
     })), budget: omdb.budget(), ...(wikidataError ? { wikidataError: true } : {}) };
   });
-  app.get('/api/omdb/budget', async () => omdb.budget());
+  app.get('/api/omdb/budget', { config: { auth: 'required' } }, async () => omdb.budget());
 }

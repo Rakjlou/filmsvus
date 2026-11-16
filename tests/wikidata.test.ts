@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { WikidataClient, WikidataUnavailable, extractFrenchSynopsis, parseWikidata } from '../server/services/wikidata.ts';
 import { OmdbClient } from '../server/services/omdb.ts';
 import { UpstreamError } from '../server/services/network.ts';
-import { buildApp } from '../server/index.ts';
-import { json, tempDb, tempDir, offline } from './helpers.ts';
+import { json, tempDb, offline, testApp } from './helpers.ts';
 import { dansMaPeau, knivesOut, parasite, wikidataFixture } from './fixtures/wikidata.ts';
 import { synopsisExtract, synopsisText } from './fixtures/wikipedia.ts';
 
@@ -102,25 +101,23 @@ test('Wikidata : recherche vide en cache, données absentes, erreurs et réponse
 });
 
 test('API recherche : Wikidata normalisé sans clé/quota OMDb, cache et liste multilingue', async t => {
-  const db = tempDb(t), fixture = wikidataFixture([knivesOut]);
-  const app = buildApp({ db, fetch: fixture.fetch, apiKey: '', dailyBudget: 0, throttleMs: 0,
-    backgroundHydration: false, postersDir: tempDir(t) });
-  t.after(() => app.close());
-  const result = await app.inject('/api/search?q=A%20Couteaux%20Tir%C3%A9s');
+  const fixture = wikidataFixture([knivesOut]);
+  const { app, authed } = testApp(t, { fetch: fixture.fetch, apiKey: '', dailyBudget: 0, throttleMs: 0 });
+  const result = await authed({ url: '/api/search?q=A%20Couteaux%20Tir%C3%A9s' });
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json().Search, [{ imdbID: knivesOut.imdbID, title: 'À couteaux tirés', originalTitle: 'Knives Out',
     englishTitle: 'Knives Out', year: 2019, directors: ['Rian Johnson'], poster: null, source: 'wikidata' }]);
   assert.equal(result.json().budget.used, 0);
-  await app.inject('/api/search?q=A%20Couteaux%20Tir%C3%A9s'); assert.equal(fixture.calls.length, 4);
-  const film = (await app.inject({ method: 'POST', url: '/api/films', payload: { title: 'Mon titre', title_fr: 'Titre français', original_title: 'Original title' } })).json();
+  await authed({ url: '/api/search?q=A%20Couteaux%20Tir%C3%A9s' }); assert.equal(fixture.calls.length, 4);
+  const film = (await authed({ method: 'POST', url: '/api/films', payload: { title: 'Mon titre', title_fr: 'Titre français', original_title: 'Original title' } })).json();
   const listed = (await app.inject('/api/films')).json().find((f: { id: number }) => f.id === film.id);
   assert.equal(listed.title_fr, 'Titre français'); assert.equal(listed.original_title, 'Original title');
 });
 
 test('API recherche : repli OMDb sur vide/erreur, source forcée, cache et quota', async t => {
   for (const fail of [false, true]) {
-    const db = tempDb(t); let omdbCalls = 0, wikiCalls = 0;
-    const app = buildApp({ db, apiKey: 'mock-key', dailyBudget: 1, throttleMs: 0, backgroundHydration: false, postersDir: tempDir(t),
+    let omdbCalls = 0, wikiCalls = 0;
+    const { authed } = testApp(t, { apiKey: 'mock-key', dailyBudget: 1, throttleMs: 0,
       fetch: async input => {
         const url = new URL(String(input));
         if (url.hostname === 'www.wikidata.org') { wikiCalls++; return fail ? new Response('', { status: 429, headers: { 'Retry-After': '0' } }) : json({ search: [] }); }
@@ -128,20 +125,19 @@ test('API recherche : repli OMDb sur vide/erreur, source forcée, cache et quota
         omdbCalls++;
         return json({ Response: 'True', Search: [{ Title: 'Film', Year: '2001', imdbID: 'tt1234567', Poster: 'N/A' }] });
       } });
-    t.after(() => app.close());
-    const response = await app.inject('/api/search?q=Film');
+    const response = await authed({ url: '/api/search?q=Film' });
     assert.equal(response.statusCode, 200, response.body);
     assert.deepEqual(response.json().Search, [{ imdbID: 'tt1234567', title: 'Film', englishTitle: 'Film', originalTitle: null,
       year: 2001, directors: [], poster: null, source: 'omdb' }]);
     const expectedWikiCalls = fail ? 8 : 2;
     assert.equal(response.json().wikidataError, fail ? true : undefined);
     assert.equal(response.json().budget.used, 1); assert.equal(omdbCalls, 1); assert.equal(wikiCalls, expectedWikiCalls);
-    const forced = await app.inject('/api/search?q=Film&source=omdb');
+    const forced = await authed({ url: '/api/search?q=Film&source=omdb' });
     assert.equal(forced.statusCode, 200); assert.equal(omdbCalls, 1); assert.equal(wikiCalls, expectedWikiCalls);
     assert.equal(forced.json().wikidataError, undefined);
-    assert.equal((await app.inject('/api/search?q=Other&source=omdb')).statusCode, 429);
+    assert.equal((await authed({ url: '/api/search?q=Other&source=omdb' })).statusCode, 429);
     assert.equal(wikiCalls, expectedWikiCalls); assert.equal(omdbCalls, 1);
-    assert.equal((await app.inject('/api/search?q=Film&source=other')).statusCode, 400);
+    assert.equal((await authed({ url: '/api/search?q=Film&source=other' })).statusCode, 400);
   }
 });
 

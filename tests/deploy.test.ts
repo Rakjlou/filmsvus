@@ -41,6 +41,19 @@ test('déploiement : script Bash sans CR', () => {
   assert.ok(!script.includes('\r'));
 });
 
+test('déploiement : retrait basic auth, cookies HTTPS et gestion des comptes applicatifs', () => {
+  const script = read('deploy/manage.sh');
+  assert.match(script, /rm -f -- "\$CONFIG_DIR\/nginx.d\/filmsvus-auth.conf" "\$CONFIG_DIR\/htpasswd"/);
+  assert.match(script, /append_env COOKIE_SECURE true/);
+  assert.match(script, /chmod o-x "\$APP_HOME" "\$CONFIG_DIR"/);
+  assert.doesNotMatch(script, /set-password|set_password|www-data|chmod o\+x|auth_basic/);
+  assert.match(script, /scripts\/user.ts add fleur/);
+  assert.match(script, /scripts\/user.ts add noe/);
+  assert.doesNotMatch(script, /http:\/\/127\.0\.0\.1:\$PORT\/api\/omdb\/budget/);
+  assert.match(script, /"\$APP_HOME\/\.local\/bin\/node" --env-file="\$ENV_FILE" scripts\/budget.ts/);
+  assert.match(read('scripts/budget.ts'), /readOnly: true/);
+});
+
 test('déploiement : syntaxe Bash valide quand Bash est disponible', t => {
   const available = spawnSync('bash', ['--version'], { encoding: 'utf8', cwd: root });
   const code = (available.error as NodeJS.ErrnoException | undefined)?.code;

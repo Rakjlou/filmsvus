@@ -7,6 +7,12 @@ affiche aussi le nombre de films qui référencent une affiche.
 L'import vérifie le SHA-256, l'intégrité SQLite et la version du schéma.
 Il fusionne les affiches sans jamais supprimer celles déjà présentes.
 
+Les comptes et les sessions sont aussi dans la base. Importer une archive locale
+remplace les comptes du VPS par ceux de la base locale : recréer les comptes
+après l'import si nécessaire avec `scripts/user.ts` (voir [INSTALL.md](INSTALL.md)).
+Les archives, notamment celles récupérées du VPS, contiennent les hashes des
+mots de passe et des jetons de session : les conserver privées.
+
 1. **Préalable.** Le site doit être créé et `install` terminé, suivant
    [INSTALL.md](INSTALL.md). Garder le service **arrêté**, idéalement faire
    le premier import avant le premier `start`. Ne lancer aucun autre script
