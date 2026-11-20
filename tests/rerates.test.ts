@@ -28,7 +28,13 @@ test('renote : seuil UTC contrôlé, notes nulles, exclusions et payload aveugle
   const old = repo.create({ title: 'Ancien', watched_at: '2024-11-19T12:00:00Z', summary: 'Secret', comment: 'Secret aussi', tag_ids: [1],
     ratings: [{ viewer_id: 1, score: 7 }, { viewer_id: 2, score: 7 }],
     plot_fr: 'Synopsis public', imdb_rating: 9, metascore: 85, rt_score: 90,
-    credits: [{ name: 'Actrice', role: 'actor', position: 0, source: 'manual' }] });
+    genres: ['Drame', 'Thriller'], countries: ['France'], poster_path: 'ancien.jpg',
+    credits: [
+      { name: 'Réalisatrice', role: 'director', position: 0, source: 'manual' },
+      { name: 'Zoé', role: 'actor', position: 0, source: 'manual' },
+      { name: 'Alice', role: 'actor', position: 0, source: 'manual' },
+      { name: 'Actrice', role: 'actor', position: 1, source: 'manual' },
+    ] });
   const boundary = repo.create({ title: 'Exactement deux ans, sans notes', watched_at: '2024-11-20T12:00:00Z' });
   repo.create({ title: 'Récent', watched_at: '2024-11-21T12:00:00Z' });
   repo.create({ title: 'Une milliseconde trop tôt', watched_at: '2024-11-20T12:00:00.001Z' });
@@ -45,13 +51,21 @@ test('renote : seuil UTC contrôlé, notes nulles, exclusions et payload aveugle
     assert.equal(Object.hasOwn(result.film, key), false, key);
   }
   assert.equal(result.film.plot_fr, 'Synopsis public'); assert.equal(result.film.imdb_rating, 9);
+  const listed = repo.list().find(film => film.id === old.id)!;
+  for (const key of ['genres', 'countries', 'poster_url', 'credits'] as const) {
+    assert.deepEqual(result.film[key], listed[key], key);
+  }
+  assert.deepEqual(result.film.credits.map((credit: { name: string }) => credit.name), ['Alice', 'Zoé', 'Actrice', 'Réalisatrice']);
   response = await authed({ url: `/api/rerate/next?exclude=${old.id}` });
   assert.equal(response.json().film.id, boundary.id);
   response = await authed({ url: `/api/rerate/next?exclude=${old.id},${boundary.id}` });
   assert.deepEqual(response.json(), { remaining: 2, film: null });
-  for (const exclude of ['', '0', '-1', '1.5', 'x', '1,,2', '1,', '01', '9007199254740992', Array(501).fill('1').join(',')]) {
+  for (const exclude of ['', '0', '-1', '1.5', 'x', '1,,2', '1,', '01', '1000000000000000', '9007199254740992', Array(501).fill('1').join(',')]) {
     const bad = await authed({ url: `/api/rerate/next?exclude=${encodeURIComponent(exclude)}` });
     assert.equal(bad.statusCode, 400, `${exclude.slice(0, 30)}: ${bad.body}`);
+  }
+  for (const exclude of ['999999999999999', Array(500).fill('999999999999999').join(',')]) {
+    assert.equal((await authed({ url: `/api/rerate/next?exclude=${exclude}` })).statusCode, 200);
   }
   assert.equal((await authed({ url: '/api/rerate/next?unexpected=1' })).statusCode, 400);
 });
@@ -62,11 +76,18 @@ test('renote : validation stricte des deux core et transaction atomique', async 
   db.exec("INSERT INTO viewers(id,name,is_core) VALUES (3,'Autre',0)");
   for (const scores of [{}, { 1: 5 }, { 1: 5, 3: 7 }, { 1: 5, 2: 7, 3: 8 }, { 1: 5, 999: 8 },
     { 1: 1.5, 2: 5 }, { 1: -1, 2: 5 }, { 1: 11, 2: 5 }, { 1: null, 2: 5 }, { 1: '8', 2: 5 },
-    { 1: true, 2: 5 }, [8, 5], { '01': 8, 2: 5 }]) {
+    { 1: true, 2: 5 }, { 1: false, 2: 5 }, [8, 5], { '01': 8, 2: 5 }]) {
     const response = await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores } });
     assert.equal(response.statusCode, 400, `${JSON.stringify(scores)}: ${response.body}`);
     assert.ok(response.json().message);
   }
+  for (const payload of [null, {}, { scores: null }, { scores: 5 }, { scores: false }, { scores: '8' }]) {
+    const response = await authed({ method: 'POST', url: `/api/rerate/${film.id}`,
+      payload: JSON.stringify(payload), headers: { 'content-type': 'application/json' } });
+    assert.equal(response.statusCode, 400, `${JSON.stringify(payload)}: ${response.body}`);
+  }
+  const invalidType = await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores: { 1: '8', 2: 5 } } });
+  assert.equal(invalidType.json().message, 'Les deux notes doivent être des nombres entiers de 0 à 10.');
   assert.equal(db.prepare('SELECT count(*) AS n FROM rerates').get()!.n, 0);
   db.exec("CREATE TRIGGER block_score BEFORE INSERT ON rerate_scores WHEN NEW.viewer_id=2 BEGIN SELECT RAISE(ABORT,'blocked'); END");
   const failed = await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores: { 1: 0, 2: 10 } } });
@@ -75,6 +96,30 @@ test('renote : validation stricte des deux core et transaction atomique', async 
   assert.equal(db.prepare('SELECT count(*) AS n FROM rerate_scores').get()!.n, 0);
   db.exec('DROP TRIGGER block_score');
   assert.equal((await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores: { 1: 0, 2: 10 } } })).statusCode, 200);
+});
+
+test('renote : les clés suivent exactement les spectateurs core, de un à dix', async t => {
+  const { db, repo, authed } = testApp(t, { now });
+  for (const count of [1, 3, 10]) {
+    db.exec('UPDATE viewers SET is_core=0');
+    for (let i = 1; i <= count; i++) {
+      db.prepare(`INSERT INTO viewers(id,name,is_core) VALUES (?,?,1)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name,is_core=1`).run(10 + i, `Spectateur ${i}`);
+    }
+    const film = repo.create({ title: `${count} spectateurs`, watched_at: '2020-01-01T00:00:00Z' });
+    const scores = Object.fromEntries(repo.viewers().map(viewer => [viewer.id, 5]));
+    const wrong: Record<string, number> = { ...scores, 1: scores[11]! };
+    delete wrong[11];
+    const before = db.prepare('SELECT count(*) AS n FROM rerates').get()!.n;
+    const invalid = await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores: wrong } });
+    assert.equal(invalid.statusCode, 400, invalid.body);
+    assert.equal(invalid.json().message, `Renseignez une note entière de 0 à 10 pour ${
+      new Intl.ListFormat('fr-FR').format(repo.viewers().map(viewer => viewer.name))} uniquement.`);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM rerates').get()!.n, before);
+    const response = await authed({ method: 'POST', url: `/api/rerate/${film.id}`, payload: { scores } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.deepEqual(response.json().scores.map((score: { viewer_id: number }) => score.viewer_id), repo.viewers().map(viewer => viewer.id));
+  }
 });
 
 test('renote : révélation publique, originaux et statistiques inchangés, conflit puis suppression et cascade', async t => {
@@ -86,15 +131,18 @@ test('renote : révélation publique, originaux et statistiques inchangés, conf
   const payload = { scores: { 1: 8, 2: 5 } };
   const response = await authed({ method: 'POST', url, payload });
   assert.equal(response.statusCode, 200, response.body);
-  assert.deepEqual(response.json(), { film_id: film.id, created_at: '2026-11-20T12:00:00.000Z', scores: [
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.deepEqual(response.json(), { created_at: '2026-11-20T12:00:00.000Z', scores: [
     { viewer_id: 1, name: 'Fleur', score: 8, original: 7, delta: 1 },
     { viewer_id: 2, name: 'Noé', score: 5, original: 7, delta: -2 },
   ] });
   const sheet = (await app.inject(`/api/films/${film.id}`)).json();
-  const { film_id, ...rerate } = response.json();
-  assert.deepEqual(sheet.rerate, rerate);
+  assert.deepEqual(sheet.rerate, response.json());
   assert.deepEqual({ ...sheet, rerate: null }, original);
   assert.deepEqual((await app.inject('/api/stats')).json(), stats);
+  for (const listed of [...repo.list(), ...repo.list(true), ...(await app.inject('/api/films')).json()]) {
+    assert.equal(Object.hasOwn(listed, 'rerate'), false);
+  }
   assert.deepEqual((await authed({ url: '/api/rerate/next' })).json(), { remaining: 0, film: null });
   assert.equal((await authed({ method: 'POST', url, payload })).statusCode, 409);
   assert.equal((await authed({ method: 'POST', url: `${url}/ignore` })).statusCode, 409);

@@ -2,8 +2,8 @@ import { mkdir, rename, unlink, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { transaction } from '../db/index.ts';
-import { FilmsRepo, normalizeImdb } from '../repo/films.ts';
-import type { Credit, Film, FilmFields, Role } from '../repo/films.ts';
+import { Conflict, FilmsRepo, normalizeImdb } from '../repo/films.ts';
+import type { Credit, Film, FilmDetail, FilmFields, Role } from '../repo/films.ts';
 import { localDay, OmdbClient } from './omdb.ts';
 import type { OmdbData } from './omdb.ts';
 import { WikidataClient, parseWikidata } from './wikidata.ts';
@@ -64,32 +64,31 @@ export function selectWikidataCandidate(film: Pick<Film, 'title' | 'year' | 'dir
   return { best: unambiguous ? best.candidate : null, ranked };
 }
 interface Options { fetch?: Fetch; postersDir?: string; now?: () => Date }
-export class HydrationConflict extends Error { statusCode = 409; }
 
 export class Hydrator {
   repo: FilmsRepo; omdb: OmdbClient; wikidata: WikidataClient;
   fetch: Fetch; postersDir: string; now: () => Date;
-  inflight = new Map<number, Promise<Film>>();
+  inflight = new Map<number, Promise<FilmDetail>>();
   constructor(repo: FilmsRepo, omdb: OmdbClient, wikidata: WikidataClient, options: Options = {}) {
     this.repo = repo; this.omdb = omdb; this.wikidata = wikidata;
     this.fetch = options.fetch ?? globalThis.fetch;
     this.postersDir = options.postersDir ?? process.env.POSTERS_DIR ?? 'data/posters';
     this.now = options.now ?? (() => new Date());
   }
-  async hydrateFilm(id: number, options: { force?: boolean } = {}): Promise<Film> {
+  async hydrateFilm(id: number, options: { force?: boolean } = {}): Promise<FilmDetail> {
     const pending = this.inflight.get(id);
     if (pending) return pending;
     const work = this.perform(id, options.force ?? false);
     this.inflight.set(id, work);
     try { return await work; } finally { this.inflight.delete(id); }
   }
-  private async perform(id: number, force: boolean): Promise<Film> {
+  private async perform(id: number, force: boolean): Promise<FilmDetail> {
     const film = this.repo.get(id);
     if (film.hydrated && !force) return film;
     const requireIdentity = (imdbId: string | null) => {
       const current = this.repo.get(id);
       if (current.imdb_id !== imdbId || current.title !== film.title) {
-        throw new HydrationConflict('Film modifié pendant l’hydratation ; relancer avec les nouvelles informations');
+        throw new Conflict('Film modifié pendant l’hydratation ; relancer avec les nouvelles informations');
       }
       return current;
     };

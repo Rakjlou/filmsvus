@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { FilmsRepo } from '../server/repo/films.ts';
 import { tempDb } from './helpers.ts';
 import { selectFilms, sorts } from '../web/listState.ts';
-import { posterInitials } from '../web/format.ts';
+import { date, posterInitials } from '../web/format.ts';
 import { stepRating } from '../web/rating.ts';
 import { displayTitles } from '../web/titles.ts';
 import { candidateSelection, normalizeCandidate } from '../web/search.ts';
 import { dansMaPeau, knivesOut } from './fixtures/wikidata.ts';
 import { safeNext } from '../web/authNavigation.ts';
 import { api, json, message } from '../web/api.ts';
-import { parseRerateExclusions, rerateCount, rerateDate, rerateDelta, rerateSynopsisOverflows } from '../web/rerate.ts';
+import { capRerateExclusions, parseRerateExclusions, rerateCount, rerateDelta, rerateSynopsisOverflows } from '../web/rerate.ts';
 import { ReratesRepo } from '../server/repo/rerates.ts';
 
 test('renote : bouton du synopsis selon les lignes rendues, avec tolérance aux arrondis', () => {
@@ -31,11 +31,14 @@ test('connexion : retour interne uniquement, y compris URLs trompeuses', () => {
 
 test('renote : différences, date française, pluriels et exclusions de session', () => {
   assert.deepEqual([null, 0, 1, -2, 10, -10].map(rerateDelta), ['—', '=', '+1', '−2', '+10', '−10']);
-  assert.equal(rerateDate('2026-11-20T12:00:00Z'), '20/11/2026');
+  assert.equal(date('2026-11-20T12:00:00Z'), '20 nov. 2026');
   assert.deepEqual([0, 1, 2].map(rerateCount), ['0 film à renoter', '1 film à renoter', '2 films à renoter']);
   for (const input of [null, '', 'invalid', '{}', 'null']) assert.deepEqual(parseRerateExclusions(input), []);
   assert.deepEqual(parseRerateExclusions('[1,2,1,0,-1,1.5,"3",null]'), [1, 2]);
-  assert.equal(parseRerateExclusions(JSON.stringify(Array.from({ length: 501 }, (_, i) => i + 1))).length, 500);
+  const ids = Array.from({ length: 501 }, (_, i) => i + 1);
+  assert.deepEqual(parseRerateExclusions(JSON.stringify(ids)), ids.slice(1));
+  assert.deepEqual(capRerateExclusions([...ids, 501]), ids.slice(1));
+  assert.deepEqual(capRerateExclusions([1, 2, 1, 3]), [1, 2, 3]);
 });
 
 test('renote : tri, filtres et calculs de la collection restent fondés sur les originaux', t => {
@@ -74,7 +77,7 @@ test('client API : 401 invalide la session, erreur française et message 429 de 
 test('renote : le client conserve le message de conflit et signale les erreurs réseau en français', async t => {
   const previousFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = previousFetch; });
-  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'RerateConflict', message: 'Ce film a déjà été renoté. Passez au film suivant.' }), { status: 409 });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'Conflict', message: 'Ce film a déjà été renoté. Passez au film suivant.' }), { status: 409 });
   await assert.rejects(api('/rerate/1', json('POST', { scores: { 1: 8, 2: 5 } })), /déjà été renoté/);
   globalThis.fetch = async () => { throw new TypeError('offline'); };
   await assert.rejects(api('/rerate/next'), /Impossible de joindre le serveur/);

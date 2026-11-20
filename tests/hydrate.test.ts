@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDb, tempDir, json } from './helpers.ts';
-import { FilmsRepo } from '../server/repo/films.ts';
+import { Conflict, FilmsRepo } from '../server/repo/films.ts';
 import { openDatabase } from '../server/db/index.ts';
 import { buildApp } from '../server/index.ts';
 import { OmdbClient, BudgetExceeded } from '../server/services/omdb.ts';
 import { WikidataClient, WikidataUnavailable } from '../server/services/wikidata.ts';
-import { Hydrator, HydrationConflict, guessYear } from '../server/services/hydrate.ts';
+import { Hydrator, guessYear } from '../server/services/hydrate.ts';
 import { main, parseOptions } from '../scripts/hydrate.ts';
 import { synopsisExtract, synopsisText } from './fixtures/wikipedia.ts';
 
@@ -282,7 +282,7 @@ test('édition pendant un appel réseau : aucune métadonnée écrite sur le nou
       return isOmdb ? json({ ...details, Poster: 'N/A' }) : json(wiki);
     };
     const hydrate = new Hydrator(repo, new OmdbClient(db, { apiKey: 'test', fetch }), new WikidataClient(db, { fetch }), { fetch });
-    await assert.rejects(hydrate.hydrateFilm(film.id), HydrationConflict);
+    await assert.rejects(hydrate.hydrateFilm(film.id), Conflict);
     const current = repo.get(film.id);
     assert.equal(current.imdb_id, 'tt7654321'); assert.equal(current.hydrated, false);
     assert.equal(current.runtime_min, null); assert.deepEqual(current.credits, []);

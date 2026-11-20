@@ -1,14 +1,16 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { Link } from 'react-router';
-import type { BlindFilm, RerateNext, RerateReveal, Viewer } from '../types.ts';
+import type { BlindFilm, RerateNext, Rerate, Viewer } from '../types.ts';
 import { api, json, message, useResource } from '../api.ts';
-import { date, number } from '../format.ts';
+import { date } from '../format.ts';
 import { displayTitles } from '../titles.ts';
-import { parseRerateExclusions, rerateCount, rerateDelta, rerateSynopsisOverflows } from '../rerate.ts';
+import { capRerateExclusions, parseRerateExclusions, rerateCount, rerateDelta, rerateSynopsisOverflows } from '../rerate.ts';
 import { Empty, ErrorMessage, Loading } from '../components/Feedback.tsx';
 import { Poster } from '../components/Poster.tsx';
 import { RatingInput } from '../components/RatingInput.tsx';
+import { Score } from '../components/FilmCard.tsx';
+import { ExternalScores, externalScores, FilmDirector, FilmFacts } from '../components/FilmFacts.tsx';
 
 const exclusionKey = 'filmsvus-rerate-exclude';
 
@@ -40,25 +42,19 @@ function Synopsis({ text }: { text: string }) {
 
 function BlindSheet({ film, heading }: { film: BlindFilm; heading: RefObject<HTMLHeadingElement | null> }) {
   const titles = displayTitles(film);
-  const director = film.credits.filter(c => c.role === 'director').map(c => c.name).join(', ') || film.director_text;
   const actors = film.credits.filter(c => c.role === 'actor').slice(0, 6).map(c => c.name).join(', ');
-  const external = [
-    { label: 'IMDb', value: film.imdb_rating, unit: '/10' },
-    { label: 'Metascore', value: film.metascore, unit: '/100' },
-    { label: 'Rotten Tomatoes', value: film.rt_score, unit: '%' },
-  ].filter(score => score.value !== null);
   return <>
     <div className="detail-poster"><Poster title={titles.main} src={film.poster_url} priority /></div>
     <div className="detail-main"><header className="detail-heading">
       <p className="eyebrow">Vu le {date(film.watched_at)}</p>
       <h2 className="rerate-film-title" tabIndex={-1} ref={heading}>{titles.main}</h2>
       {titles.secondary && <p className="secondary-title">{titles.secondary}</p>}
-      {director && <p className="detail-director">{director}</p>}
-      <p className="film-facts">{[film.year, film.runtime_min ? `${film.runtime_min} min` : null, ...film.genres, ...film.countries].filter(Boolean).join(' · ')}</p>
+      <FilmDirector film={film} />
+      <FilmFacts film={film} />
     </header>
     {actors && <p className="hint">Avec {actors}</p>}
     <Synopsis key={film.id} text={film.plot_fr || film.plot_en || 'Aucun synopsis disponible pour ce film.'} />
-    {external.length > 0 && <div className="external-scores" aria-label="Les notes de la presse et du public">{external.map(score => <div key={score.label}><span>{score.label}</span><b>{number(score.value)}<small>{score.unit}</small></b></div>)}</div>}
+    <ExternalScores scores={externalScores(film)} label="Les notes de la presse et du public" />
     </div>
   </>;
 }
@@ -70,13 +66,15 @@ export function ReratePage() {
   const next = useResource<RerateNext>(`/rerate/next${exclude.length ? `?exclude=${exclude.join(',')}` : ''}`);
   const viewers = useResource<Viewer[]>('/viewers');
   const [scores, setScores] = useState<Record<number, number | null>>({});
-  const [reveal, setReveal] = useState<RerateReveal | null>(null);
+  const [reveal, setReveal] = useState<Rerate | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const filmHeading = useRef<HTMLHeadingElement>(null), revealHeading = useRef<HTMLHeadingElement>(null);
   const emptyHeading = useRef<HTMLDivElement>(null);
   const film = next.data?.film;
   const core = viewers.data?.filter(v => v.is_core) ?? [];
-  const complete = core.length === 2 && core.every(v => scores[v.id] != null);
+  const complete = core.length > 0 && core.every(v => scores[v.id] != null);
+  const remaining = next.data?.remaining;
+  const done = remaining === 0;
 
   useEffect(() => {
     try { sessionStorage.setItem(exclusionKey, JSON.stringify(exclude)); } catch { /* Storage is optional. */ }
@@ -94,12 +92,12 @@ export function ReratePage() {
   function later() {
     if (!film) return;
     setScores({}); setError('');
-    setExclude(ids => [...new Set([...ids, film.id])].slice(-500));
+    setExclude(ids => capRerateExclusions([...ids, film.id]));
   }
   async function submit() {
     if (!film || !complete || busy) return;
     setBusy(true); setError('');
-    try { setReveal(await api<RerateReveal>(`/rerate/${film.id}`, json('POST', { scores }))); }
+    try { setReveal(await api<Rerate>(`/rerate/${film.id}`, json('POST', { scores }))); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   async function ignore() {
@@ -118,8 +116,8 @@ export function ReratePage() {
     {next.error && <ErrorMessage retry={next.reload}>{next.error}</ErrorMessage>}
     {error && <ErrorMessage action={<button type="button" disabled={busy} onClick={advance}>Actualiser la file</button>}>{error}</ErrorMessage>}
     {next.data && !film && <div tabIndex={-1} ref={emptyHeading}>
-      <Empty title={next.data.remaining === 0 ? 'Tous les souvenirs ont eu leur séance.' : 'On garde la suite pour plus tard.'}>
-        <p>{next.data.remaining === 0 ? 'Aucun film à renoter pour le moment. Revenez quand d’autres séances auront deux ans !' : 'Vous avez parcouru tous les films disponibles pour cette session.'}</p>
+      <Empty title={done ? 'Tous les souvenirs ont eu leur séance.' : 'On garde la suite pour plus tard.'}>
+        <p>{done ? 'Aucun film à renoter pour le moment. Revenez quand d’autres séances auront deux ans !' : 'Vous avez parcouru tous les films disponibles pour cette session.'}</p>
         {exclude.length > 0 && next.data.remaining > 0 && <button type="button" onClick={() => setExclude([])}>Revoir les films remis à plus tard</button>}
         <Link className="text-link" to="/">Retour à la collection</Link>
       </Empty>
@@ -129,8 +127,8 @@ export function ReratePage() {
       {reveal ? <section className="surface rerate-panel rerate-reveal" aria-labelledby="reveal-title">
         <p className="eyebrow">Les souvenirs face aux notes</p><h2 id="reveal-title" tabIndex={-1} ref={revealHeading}>Le verdict de la mémoire</h2>
         <div className="rerate-comparisons">{reveal.scores.map(score => <div className="rerate-comparison" key={score.viewer_id}>
-          <h3>{score.name}</h3><dl><div><dt>De mémoire</dt><dd>{score.score}<small>/10</small></dd></div>
-          <div><dt>À l’époque</dt><dd>{number(score.original)}{score.original !== null && <small>/10</small>}</dd></div>
+          <h3>{score.name}</h3><dl><div><dt>De mémoire</dt><dd><Score value={score.score} /></dd></div>
+          <div><dt>À l’époque</dt><dd><Score value={score.original} /></dd></div>
           <div><dt>Différence</dt><dd className="rerate-delta">{rerateDelta(score.delta)}</dd></div></dl>
         </div>)}</div>
         <p className="hint">Les notes d’origine sont conservées. Cette renote reste un souvenir, sans effet sur les statistiques.</p>

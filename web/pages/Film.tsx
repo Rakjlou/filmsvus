@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import type { Candidate, Film, Role, SearchResponse, Viewer } from '../types.ts';
+import type { Candidate, FilmDetail, Role, SearchResponse, Viewer } from '../types.ts';
 import type { WikidataCandidate } from '../../server/services/wikidata.ts';
 import { api, json, message, useResource } from '../api.ts';
 import { date, number } from '../format.ts';
-import { rerateDate, rerateDelta } from '../rerate.ts';
+import { rerateDelta } from '../rerate.ts';
 import { Poster } from '../components/Poster.tsx';
 import { Score } from '../components/FilmCard.tsx';
+import { ExternalScores, externalScores, FilmDirector, FilmFacts } from '../components/FilmFacts.tsx';
 import { FilmForm } from '../components/FilmForm.tsx';
 import { FilmSearch } from '../components/FilmSearch.tsx';
 import { displayTitles } from '../titles.ts';
@@ -18,7 +19,7 @@ const roles: [Role, string][] = [['director', 'Réalisation'], ['writer', 'Scén
 export function FilmPage() {
   const { id } = useParams();
   const { canEdit } = useAuth();
-  const resource = useResource<Film>(`/films/${id}`);
+  const resource = useResource<FilmDetail>(`/films/${id}`);
   const viewers = useResource<Viewer[]>('/viewers');
   const navigate = useNavigate(), location = useLocation();
   const routeState = location.state as { returnTo?: string; added?: boolean } | null;
@@ -33,12 +34,8 @@ export function FilmPage() {
     return { label, names: names.join(', ') || (role === 'director' ? film.director_text?.trim() : '') };
   }).filter(credit => credit.names) : [];
   const companies = film?.companies.map(c => c.name.trim()).filter(Boolean).join(', ');
-  const externalScores = film ? [
-    { label: 'IMDb', value: film.imdb_rating, unit: '/10' },
-    { label: 'Metascore', value: film.metascore, unit: '/100' },
-    { label: 'Rotten Tomatoes', value: film.rt_score, unit: '%' },
-  ].filter(metric => metric.value !== null) : [];
-  const hasExternalInfo = film && (externalScores.length > 0 || film.awards || film.box_office || film.languages.length > 0 || film.imdb_id);
+  const external = film ? externalScores(film) : [];
+  const hasExternalInfo = film && (external.length > 0 || film.awards || film.box_office || film.languages.length > 0 || film.imdb_id);
   useEffect(() => { if (film) document.title = `${displayTitles(film).main} · Films vus`; }, [film]);
   useEffect(() => {
     if (!canEdit || !film?.needs_review || busy) return;
@@ -62,7 +59,7 @@ export function FilmPage() {
     let attempts = 0;
     const interval = window.setInterval(() => {
       if (++attempts >= 10) window.clearInterval(interval);
-      void api<Film>(`/films/${id}`, { signal: controller.signal }).then(updated => {
+      void api<FilmDetail>(`/films/${id}`, { signal: controller.signal }).then(updated => {
         if (updated.hydrated || updated.needs_review) resource.setData(updated);
       }).catch(() => { window.clearInterval(interval); });
     }, 3000);
@@ -75,11 +72,12 @@ export function FilmPage() {
     return () => window.clearTimeout(timeout);
   }, [confirmRerateDelete]);
   async function cancelRerate() {
+    if (!film) return;
     if (!confirmRerateDelete) { setConfirmRerateDelete(true); return; }
     setBusy(true); setError('');
     try {
       await api(`/rerate/${id}`, json('DELETE'));
-      resource.setData(await api<Film>(`/films/${id}`));
+      resource.setData({ ...film, rerate: null });
       setNotice('La renote est annulée. Ce film peut à nouveau être renoté.');
       setConfirmRerateDelete(false);
     } catch (error) { setError(message(error)); }
@@ -89,8 +87,8 @@ export function FilmPage() {
     if (!film) return;
     setBusy(true); setError(''); setNotice(''); setCandidates(undefined);
     try {
-      if (candidateId) resource.setData(await api<Film>(`/films/${id}`, json('PATCH', { imdb_id: candidateId })));
-      const updated = await api<Film>(`/films/${id}/hydrate`, json('POST'));
+      if (candidateId) resource.setData(await api<FilmDetail>(`/films/${id}`, json('PATCH', { imdb_id: candidateId })));
+      const updated = await api<FilmDetail>(`/films/${id}/hydrate`, json('POST'));
       resource.setData(updated);
       if (updated.needs_review) {
         setNotice('Plusieurs films peuvent correspondre. Choisissez le bon ci-dessous.');
@@ -109,8 +107,8 @@ export function FilmPage() {
       <div className="detail-top"><div className="detail-poster"><Poster title={displayTitles(film).main} src={film.poster_url} priority /><span className="poster-undertext">Une séance de Fleur & Noé</span></div>
       <div className="detail-main"><header className="detail-heading"><p className="eyebrow">Vu le {date(film.watched_at)}</p><h1>{displayTitles(film).main}</h1>
         {displayTitles(film).secondary && <p className="secondary-title">{displayTitles(film).secondary}</p>}
-        <p className="detail-director">{film.director_text || film.credits.filter(c => c.role === 'director').map(c => c.name).join(', ') || 'Réalisation à découvrir'}</p>
-        <p className="film-facts">{[film.year, film.runtime_min ? `${film.runtime_min} min` : null, ...film.genres, ...film.countries].filter(Boolean).join(' · ') || (canEdit ? 'Les détails du film sont à enrichir.' : 'Les détails du film ne sont pas encore disponibles.')}</p>
+        <FilmDirector film={film} fallback="Réalisation à découvrir" />
+        <FilmFacts film={film} fallback={canEdit ? 'Les détails du film sont à enrichir.' : 'Les détails du film ne sont pas encore disponibles.'} />
       </header>
       {canEdit && <div className="detail-actions"><button type="button" disabled={busy} onClick={() => setEditing(!editing)} aria-expanded={editing}><Icon name="edit" /> {editing ? 'Fermer l’édition' : 'Modifier'}</button><button className="primary" type="button" disabled={busy || film.hydrated || editing} onClick={() => void hydrate()}><Icon name="sparkle" /> {busy ? 'Un instant…' : film.hydrated ? 'Film enrichi' : 'Enrichir'}</button></div>}
       {error && <ErrorMessage>{error}</ErrorMessage>}{notice && <p className="notice" role="status">{notice}</p>}
@@ -118,7 +116,7 @@ export function FilmPage() {
       {editing ? <section className="surface edit-panel" aria-label="Modifier le film">{viewers.loading && <Loading />}{viewers.error && <ErrorMessage retry={viewers.reload}>{viewers.error}</ErrorMessage>}{viewers.data && <FilmForm film={film} viewers={viewers.data} onCancel={() => setEditing(false)} onSaved={updated => { resource.setData(updated); setEditing(false); setNotice('Vos modifications sont enregistrées.'); }} />}</section> : <>
         <section className="ratings-panel" aria-label="Les notes"><div className="couple-rating"><span className="eyebrow">Notre moyenne</span><Score value={film.avg} /><span className="hint">Fleur & Noé</span></div><div className="individual-ratings">{film.ratings.filter(r => r.is_core).map(r => <div key={r.id}><span>{r.name}</span><Score small value={r.score} /></div>)}<div className="derived-rating"><span>Écart F / N</span><span>{number(film.gap)} <small>pts</small></span></div></div></section>
         {film.rerate && <section className="rerate-note" aria-label="Renote de mémoire">
-          <p>Renoté le {rerateDate(film.rerate.created_at)} : {film.rerate.scores.map(score => `${score.name} ${score.score} (${rerateDelta(score.delta)})`).join(' · ')}</p>
+          <p>Renoté le {date(film.rerate.created_at)} : {film.rerate.scores.map(score => `${score.name} ${score.score} (${rerateDelta(score.delta)})`).join(' · ')}</p>
           {canEdit && <button type="button" className="text-button rerate-cancel" disabled={busy} onBlur={() => setConfirmRerateDelete(false)} onClick={() => void cancelRerate()}>{confirmRerateDelete ? "confirmer l’annulation ?" : 'annuler la renote'}</button>}
         </section>}
         {film.tags.length > 0 && <section className="detail-tags"><h2>Souvenirs de séance</h2><div className="chips">{film.tags.map(tag => <span className="tag-label" key={tag.id}>{tag.emoji} {tag.label}</span>)}</div></section>}
@@ -132,7 +130,7 @@ export function FilmPage() {
     </div>
     </div>
     <div className="detail-extras"><section className="surface"><p className="eyebrow">Derrière la caméra</p><h2>Le générique</h2>{credits.length > 0 || companies ? <dl className="credits-list">{credits.map(({ label, names }) => <div key={label}><dt>{label}</dt><dd>{names}</dd></div>)}{companies && <div><dt>Sociétés de production</dt><dd>{companies}</dd></div>}</dl> : <p className="hint">{canEdit ? 'Cliquez sur « Enrichir » pour découvrir le générique.' : 'Le générique n’est pas encore disponible.'}</p>}</section>
-      {hasExternalInfo && <section className="surface"><p className="eyebrow">Les autres regards</p><h2>Au-delà de notre canapé</h2>{externalScores.length > 0 && <div className="external-scores">{externalScores.map(({ label, value, unit }) => <div key={label}><span>{label}</span><b>{number(value)}<small>{unit}</small></b></div>)}</div>}<dl className="credits-list">{film.awards && <div><dt>Récompenses</dt><dd>{film.awards}</dd></div>}{film.box_office && <div><dt>Box-office</dt><dd>{film.box_office}</dd></div>}{film.languages.length > 0 && <div><dt>Langues</dt><dd>{film.languages.join(', ')}</dd></div>}</dl>{(film.imdb_id) && <div className="external-links">{film.imdb_id && <a className="button" href={`https://www.imdb.com/title/${film.imdb_id}/`} target="_blank" rel="noopener noreferrer">IMDb <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}</div>}</section>}
+      {hasExternalInfo && <section className="surface"><p className="eyebrow">Les autres regards</p><h2>Au-delà de notre canapé</h2><ExternalScores scores={external} /><dl className="credits-list">{film.awards && <div><dt>Récompenses</dt><dd>{film.awards}</dd></div>}{film.box_office && <div><dt>Box-office</dt><dd>{film.box_office}</dd></div>}{film.languages.length > 0 && <div><dt>Langues</dt><dd>{film.languages.join(', ')}</dd></div>}</dl>{(film.imdb_id) && <div className="external-links">{film.imdb_id && <a className="button" href={`https://www.imdb.com/title/${film.imdb_id}/`} target="_blank" rel="noopener noreferrer">IMDb <Icon name="external" /><span className="sr-only"> (nouvel onglet)</span></a>}</div>}</section>}
     </div>
     {canEdit && <div className="delete-area">{confirmDelete ? <section className="delete-confirm" aria-labelledby="delete-title"><h2 id="delete-title">Supprimer « {displayTitles(film).main} » ?</h2><p>Les notes, tags et souvenirs de cette séance seront supprimés.</p><div className="form-actions"><button type="button" autoFocus disabled={busy} onClick={() => { setConfirmDelete(false); window.requestAnimationFrame(() => deleteButton.current?.focus()); }}>Garder le film</button><button className="danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Suppression…' : 'Supprimer définitivement'}</button></div></section> : <button ref={deleteButton} type="button" className="text-button danger-text" disabled={busy || editing} onClick={() => setConfirmDelete(true)}>Supprimer cette séance</button>}</div>}
     </article>}

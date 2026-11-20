@@ -84,7 +84,7 @@ Le frontend utilise React 19, React Router, Vite 8 et du CSS natif :
   proposés au hasard sans notes ni souvenirs personnels. Saisir les deux notes de mémoire
   révèle les originales et leur différence. Chaque film passe une seule fois ; « Ignorer »
   le retire et « Plus tard » le met de côté pour la session. La renote est visible sur
-  la fiche et annulable après confirmation inline, sans modifier les notes d’origine,
+  la fiche (« Renoté le 20 nov. 2026 : … ») et annulable après confirmation inline, sans modifier les notes d’origine,
   moyennes, tris, filtres ou statistiques.
 - `/connexion` : connexion, compte connecté et déconnexion. L'ajout redirige
   ici si nécessaire ; `?next=` permet de retrouver la page interne demandée.

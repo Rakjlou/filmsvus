@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import type { Film, FilmInput, Viewer } from '../types.ts';
+import type { FilmDetail, FilmInput, Viewer } from '../types.ts';
 import { localDateTime } from '../format.ts';
 import { api, json, message } from '../api.ts';
 import { RatingInput } from './RatingInput.tsx';
 import { TagPicker } from './TagPicker.tsx';
 import { ErrorMessage } from './Feedback.tsx';
 
-export function FilmForm({ film, viewers, onSaved, onCancel, imdb = null }: { film?: Partial<Film>; viewers: Viewer[]; onSaved: (film: Film) => void; onCancel?: () => void; imdb?: string | null }) {
+export function FilmForm({ film, viewers, onSaved, onCancel, imdb = null }: { film?: Partial<FilmDetail>; viewers: Viewer[]; onSaved: (film: FilmDetail) => void; onCancel?: () => void; imdb?: string | null }) {
   const [title, setTitle] = useState(film?.title ?? ''), [director, setDirector] = useState(film?.director_text ?? '');
   const [titleFr, setTitleFr] = useState(film?.title_fr ?? ''), [originalTitle, setOriginalTitle] = useState(film?.original_title ?? '');
   const [year, setYear] = useState(film?.year?.toString() ?? ''), [watchedAt, setWatchedAt] = useState(localDateTime(film?.watched_at));
@@ -21,7 +21,7 @@ export function FilmForm({ film, viewers, onSaved, onCancel, imdb = null }: { fi
       summary: summary.trim() || null, comment: comment.trim() || null,
       tag_ids: tags, ratings: viewers.filter(v => v.is_core).map(v => ({ viewer_id: v.id, score: ratings[v.id] ?? null })),
       ...(imdb ? { imdb_id: imdb } : {}) };
-    try { onSaved(await api<Film>(film?.id ? `/films/${film.id}` : '/films', json(film?.id ? 'PATCH' : 'POST', payload))); }
+    try { onSaved(await api<FilmDetail>(film?.id ? `/films/${film.id}` : '/films', json(film?.id ? 'PATCH' : 'POST', payload))); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   return <form className="film-form" onSubmit={event => { event.preventDefault(); void save(); }}><fieldset disabled={busy} className="form-body">

@@ -14,12 +14,12 @@ const positiveId = { type: 'integer', minimum: 1 };
 export const idParams = { type: 'object', required: ['id'], additionalProperties: false, properties: { id: positiveId } };
 export const rerateQuery = {
   type: 'object', additionalProperties: false,
-  properties: { exclude: { type: 'string', maxLength: 8500, pattern: '^[1-9][0-9]{0,15}(,[1-9][0-9]{0,15}){0,499}$' } },
+  properties: { exclude: { type: 'string', pattern: '^[1-9][0-9]{0,14}(,[1-9][0-9]{0,14}){0,499}$' } },
 };
 export const rerateBody = {
   type: 'object', required: ['scores'], additionalProperties: false,
   properties: { scores: {
-    type: 'object', minProperties: 2, maxProperties: 2,
+    type: 'object', minProperties: 1, maxProperties: 10,
     propertyNames: { pattern: '^[1-9][0-9]*$' },
     additionalProperties: { type: 'integer', minimum: 0, maximum: 10 },
   } },

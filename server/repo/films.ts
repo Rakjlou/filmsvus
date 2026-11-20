@@ -13,7 +13,6 @@ export interface RerateScore {
   viewer_id: number; name: string; score: number; original: number | null; delta: number | null;
 }
 export interface Rerate { created_at: string; scores: RerateScore[] }
-export interface RerateReveal extends Rerate { film_id: number }
 export interface FilmFields {
   title: string; title_fr: string | null; original_title: string | null;
   year: number | null; watched_at: string; director_text: string | null;
@@ -31,8 +30,8 @@ export interface Film extends FilmFields {
   avg: number | null; gap: number | null;
   tags: Tag[]; credits: Credit[]; companies: Company[];
   poster_url: string | null; hydrated: boolean;
-  rerate: Rerate | null;
 }
+export interface FilmDetail extends Film { rerate: Rerate | null }
 export interface RatingInput { viewer_id: number; score: number | null }
 export type FilmInput = Partial<FilmFields> & {
   ratings?: RatingInput[]; tag_ids?: number[]; credits?: Credit[]; companies?: Company[];
@@ -41,6 +40,10 @@ type Row = Record<string, unknown>;
 
 export class NotFound extends Error { statusCode = 404; }
 export class InvalidInput extends Error { statusCode = 400; }
+export class Conflict extends Error { statusCode = 409; }
+
+export function posterUrl(path: unknown): string | null { return path ? `/posters/${path}` : null; }
+export function parseJsonColumn(value: unknown): string[] { return JSON.parse(String(value)); }
 
 // Only these trusted identifiers can appear in a dynamically constructed UPDATE.
 const columns = new Set([
@@ -78,6 +81,13 @@ export class FilmsRepo {
   require(id: number): void {
     if (!this.db.prepare('SELECT id FROM films WHERE id=?').get(id)) throw new NotFound('Film introuvable');
   }
+  credits(): (Credit & { film_id: number })[];
+  credits(filmId: number): Credit[];
+  credits(filmId?: number): Credit[] {
+    const rows = this.db.prepare(`SELECT * FROM credits${filmId === undefined ? '' : ' WHERE film_id=?'}
+      ORDER BY role,position,name`).all(...(filmId === undefined ? [] : [filmId])) as unknown as (Credit & { film_id: number })[];
+    return filmId === undefined ? rows : rows.map(({ film_id, ...credit }) => credit);
+  }
   list(detail = false, id?: number): Film[] {
     const where = id === undefined ? '' : ' WHERE id=?';
     const rows = this.db.prepare(`SELECT * FROM films${where} ORDER BY watched_at DESC, id DESC`)
@@ -86,10 +96,10 @@ export class FilmsRepo {
     const ratings = this.db.prepare(`SELECT r.*,v.name,v.is_core FROM ratings r
       JOIN viewers v ON v.id=r.viewer_id`).all() as Row[];
     const tags = this.db.prepare('SELECT ft.film_id,t.* FROM film_tags ft JOIN tags t ON t.id=ft.tag_id').all() as Row[];
-    const credits = this.db.prepare('SELECT * FROM credits ORDER BY role,position,name').all() as Row[];
+    const credits = this.credits();
     const companies = this.db.prepare('SELECT * FROM companies ORDER BY name').all() as Row[];
-    const group = (data: Row[]) => {
-      const map = new Map<number, Row[]>();
+    const group = <T extends { film_id?: unknown }>(data: T[]) => {
+      const map = new Map<number, T[]>();
       for (const row of data) {
         const key = Number(row.film_id);
         if (!map.has(key)) map.set(key, []);
@@ -106,17 +116,16 @@ export class FilmsRepo {
       }));
       const core = filmRatings.filter(v => v.is_core);
       const film = { ...row,
-        genres: JSON.parse(String(row.genres)), countries: JSON.parse(String(row.countries)),
-        languages: JSON.parse(String(row.languages)),
+        genres: parseJsonColumn(row.genres), countries: parseJsonColumn(row.countries),
+        languages: parseJsonColumn(row.languages),
         needs_review: Boolean(row.needs_review),
         ratings: filmRatings, core_ratings: core,
         ...ratingMetrics(core.map(v => v.score)),
         tags: (byTag.get(filmId) ?? []).map(({ film_id, ...tag }) => tag),
         credits: (byCredit.get(filmId) ?? []).map(({ film_id, ...credit }) => credit),
         companies: (byCompany.get(filmId) ?? []).map(({ film_id, ...company }) => company),
-        poster_url: row.poster_path ? `/posters/${row.poster_path}` : null,
+        poster_url: posterUrl(row.poster_path),
         hydrated: Boolean(row.hydrated_at),
-        rerate: detail ? this.rerate(filmId) : null,
       } as unknown as Film;
       if (!detail) {
         // Raw provider responses are useful on the detail endpoint only.
@@ -126,20 +135,20 @@ export class FilmsRepo {
       return film;
     });
   }
-  get(id: number): Film {
+  get(id: number): FilmDetail {
     const film = this.list(true, id)[0];
     if (!film) throw new NotFound('Film introuvable');
-    return film;
+    return { ...film, rerate: this.rerate(id) };
   }
   rerate(id: number): Rerate | null {
-    const row = this.db.prepare("SELECT created_at FROM rerates WHERE film_id=? AND status='rated'").get(id);
-    if (!row) return null;
-    const scores = this.db.prepare(`SELECT s.viewer_id,v.name,s.score,r.score AS original,
-      CASE WHEN r.score IS NULL THEN NULL ELSE s.score-r.score END AS delta
-      FROM rerate_scores s JOIN viewers v ON v.id=s.viewer_id
+    const rows = this.db.prepare(`SELECT rr.created_at,s.viewer_id,v.name,s.score,r.score AS original,
+      s.score-r.score AS delta
+      FROM rerate_scores s JOIN rerates rr ON rr.film_id=s.film_id AND rr.status='rated'
+      JOIN viewers v ON v.id=s.viewer_id
       LEFT JOIN ratings r ON r.film_id=s.film_id AND r.viewer_id=s.viewer_id
-      WHERE s.film_id=? ORDER BY s.viewer_id`).all(id) as unknown as RerateScore[];
-    return { created_at: String(row.created_at), scores };
+      WHERE s.film_id=? ORDER BY s.viewer_id`).all(id) as unknown as (RerateScore & { created_at: string })[];
+    if (!rows.length) return null;
+    return { created_at: rows[0]!.created_at, scores: rows.map(({ created_at, ...score }) => score) };
   }
   writeFields(id: number, fields: FilmInput): void {
     const entries = Object.entries(fields).filter(([key, value]) => columns.has(key) && value !== undefined);
@@ -154,7 +163,7 @@ export class FilmsRepo {
     this.db.prepare(`UPDATE films SET ${entries.map(([key]) => `${key}=?`).join(',')},
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`).run(...values, id);
   }
-  create(input: FilmInput & { title: string }): Film {
+  create(input: FilmInput & { title: string }): FilmDetail {
     const id = transaction(this.db, () => {
       const result = this.db.prepare('INSERT INTO films(title,watched_at) VALUES (?,?)')
         .run(input.title, input.watched_at ?? new Date().toISOString());
@@ -168,7 +177,7 @@ export class FilmsRepo {
     });
     return this.get(id);
   }
-  patch(id: number, input: FilmInput): Film {
+  patch(id: number, input: FilmInput): FilmDetail {
     transaction(this.db, () => {
       const previous = this.get(id);
       if (input.imdb_id !== undefined && (input.imdb_id ? normalizeImdb(input.imdb_id) : null) !== previous.imdb_id) {
@@ -195,12 +204,12 @@ export class FilmsRepo {
       ON CONFLICT(film_id,viewer_id) DO UPDATE SET score=excluded.score`);
     for (const rating of ratings) upsert.run(id, rating.viewer_id, rating.score);
   }
-  setRatings(id: number, ratings: RatingInput[]): Film { return this.patch(id, { ratings }); }
+  setRatings(id: number, ratings: RatingInput[]): FilmDetail { return this.patch(id, { ratings }); }
   writeTags(id: number, ids: number[]): void {
     this.db.prepare('DELETE FROM film_tags WHERE film_id=?').run(id);
     for (const tag of new Set(ids)) this.db.prepare('INSERT INTO film_tags VALUES (?,?)').run(id, tag);
   }
-  setTags(id: number, ids: number[]): Film { return this.patch(id, { tag_ids: ids }); }
+  setTags(id: number, ids: number[]): FilmDetail { return this.patch(id, { tag_ids: ids }); }
   writeCredits(id: number, credits: Credit[]): void {
     const insert = this.db.prepare(`INSERT INTO credits(film_id,role,name,position,source) VALUES (?,?,?,?,?)
       ON CONFLICT(film_id,role,name) DO UPDATE SET position=excluded.position,source=excluded.source

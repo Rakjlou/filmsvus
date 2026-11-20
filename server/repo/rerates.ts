@@ -1,12 +1,11 @@
 import { transaction } from '../db/index.ts';
-import { FilmsRepo, InvalidInput, NotFound } from './films.ts';
-import type { Film, RerateReveal } from './films.ts';
+import { Conflict, FilmsRepo, InvalidInput, NotFound, parseJsonColumn, posterUrl } from './films.ts';
+import type { Film, Rerate } from './films.ts';
 
 export type BlindFilm = Pick<Film, 'id' | 'title' | 'title_fr' | 'original_title' | 'year' | 'watched_at'
   | 'director_text' | 'credits' | 'runtime_min' | 'genres' | 'countries' | 'poster_url'
   | 'plot_fr' | 'plot_en' | 'imdb_rating' | 'metascore' | 'rt_score'>;
 export interface RerateNext { remaining: number; film: BlindFilm | null }
-export class RerateConflict extends Error { statusCode = 409; }
 
 // Clamp leap day to February's last day, preserving the UTC time of day.
 export function rerateCutoff(now: number): string {
@@ -35,41 +34,35 @@ export class ReratesRepo {
       FROM films f WHERE ${eligible}${exclusion} ORDER BY random() LIMIT 1`).get(cutoff, ...exclude);
     if (!row) return { remaining, film: null };
     const { genres, countries, poster_path, ...fields } = row;
-    const credits = db.prepare('SELECT role,name,position,source FROM credits WHERE film_id=? ORDER BY role,position,name').all(Number(row.id));
-    return { remaining, film: { ...fields, genres: JSON.parse(String(genres)), countries: JSON.parse(String(countries)),
-      poster_url: poster_path ? `/posters/${poster_path}` : null, credits } as unknown as BlindFilm };
+    return { remaining, film: { ...fields, genres: parseJsonColumn(genres), countries: parseJsonColumn(countries),
+      poster_url: posterUrl(poster_path), credits: this.films.credits(Number(row.id)) } as unknown as BlindFilm };
   }
 
-  requireEligible(id: number, at: number): void {
-    this.films.require(id);
+  private claim(id: number, status: 'rated' | 'ignored'): void {
+    const at = this.now();
     if (!this.films.db.prepare(`SELECT id FROM films f WHERE f.id=? AND ${eligible}`).get(id, rerateCutoff(at))) {
-      throw new RerateConflict('Ce film est trop récent ou a déjà été renoté ou ignoré. Passez au film suivant.');
+      this.films.require(id);
+      throw new Conflict('Ce film est trop récent ou a déjà été renoté ou ignoré. Passez au film suivant.');
     }
+    this.films.db.prepare('INSERT INTO rerates VALUES (?,?,?)').run(id, status, new Date(at).toISOString());
   }
 
-  rate(id: number, scores: Record<string, number>): RerateReveal {
+  rate(id: number, scores: Record<string, number>): Rerate {
     return transaction(this.films.db, () => {
-      const at = this.now();
-      this.requireEligible(id, at);
+      this.claim(id, 'rated');
       const viewers = this.films.viewers(), keys = Object.keys(scores);
-      if (viewers.length !== 2 || keys.length !== viewers.length
-        || !viewers.every(v => Object.hasOwn(scores, String(v.id)))
-        || !Object.values(scores).every(score => Number.isInteger(score) && score >= 0 && score <= 10)) {
-        throw new InvalidInput('Renseignez une note entière de 0 à 10 pour Fleur et Noé uniquement.');
+      if (keys.length !== viewers.length || !viewers.every(v => Object.hasOwn(scores, String(v.id)))) {
+        const names = new Intl.ListFormat('fr-FR').format(viewers.map(v => v.name));
+        throw new InvalidInput(`Renseignez une note entière de 0 à 10 pour ${names} uniquement.`);
       }
-      this.films.db.prepare("INSERT INTO rerates VALUES (?,'rated',?)").run(id, new Date(at).toISOString());
       const insert = this.films.db.prepare('INSERT INTO rerate_scores VALUES (?,?,?)');
       for (const viewer of viewers) insert.run(id, viewer.id, scores[String(viewer.id)]!);
-      return { film_id: id, ...this.films.rerate(id)! };
+      return this.films.rerate(id)!;
     });
   }
 
   ignore(id: number): void {
-    transaction(this.films.db, () => {
-      const at = this.now();
-      this.requireEligible(id, at);
-      this.films.db.prepare("INSERT INTO rerates VALUES (?,'ignored',?)").run(id, new Date(at).toISOString());
-    });
+    transaction(this.films.db, () => this.claim(id, 'ignored'));
   }
 
   delete(id: number): void {
