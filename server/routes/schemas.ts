@@ -12,6 +12,18 @@ const nullableText = { type: ['string', 'null'], maxLength: 50_000 };
 const strings = { type: 'array', items: { type: 'string', minLength: 1, maxLength: 200 }, maxItems: 100, uniqueItems: true };
 const positiveId = { type: 'integer', minimum: 1 };
 export const idParams = { type: 'object', required: ['id'], additionalProperties: false, properties: { id: positiveId } };
+export const rerateQuery = {
+  type: 'object', additionalProperties: false,
+  properties: { exclude: { type: 'string', maxLength: 8500, pattern: '^[1-9][0-9]{0,15}(,[1-9][0-9]{0,15}){0,499}$' } },
+};
+export const rerateBody = {
+  type: 'object', required: ['scores'], additionalProperties: false,
+  properties: { scores: {
+    type: 'object', minProperties: 2, maxProperties: 2,
+    propertyNames: { pattern: '^[1-9][0-9]*$' },
+    additionalProperties: { type: 'integer', minimum: 0, maximum: 10 },
+  } },
+};
 export const ratingsBody = {
   type: 'object', required: ['ratings'], additionalProperties: false,
   properties: { ratings: { type: 'array', maxItems: 100, items: {

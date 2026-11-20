@@ -70,6 +70,8 @@ avec des hashes scrypt créés à coût réduit. Le test du vrai classeur lit
 
 ## Données
 
+**Renoter** (`/renoter`, connexion requise) propose les films vus depuis au moins deux années calendaires UTC, une seule fois chacun. Les notes du couple et souvenirs personnels sont absents de la fiche à l’aveugle ; les notes d’origine sont révélées après saisie des deux notes de mémoire. Les tables v4 `rerates` et `rerate_scores` conservent les renotes et les films ignorés. Ces données restent informatives, sans effet sur notes, moyennes, tris, filtres ou statistiques. « Plus tard » exclut un film pour la session du navigateur ; annuler une renote le remet dans la file.
+
 - **392 films**. Notes **entières de 0 à 10** (Fleur, Noé), `-` correspond à `null` ; seule la moyenne du couple peut tomber sur un demi-point. Plus d'invités ni de Letterboxd dans l'outil (retirés le 12/11/2026 à la demande du propriétaire, migration v2 ; ces données restent dans le classeur source). Sauvegarde d'avant migration : `data/films.db.bak-20261112-avant-retours`.
 - **Titres** : on affiche le titre original (Wikidata P1476) en gros et le titre français en petit s'il diffère ; si l'original n'a pas de lettre latine, c'est l'inverse. Le `Title` d'OMDb est le titre **anglais**, jamais l'original.
 - **Tags purement cosmétiques**, par exemple `😭 +1` (« on a pleuré ») : ils n'entrent jamais dans un calcul.
@@ -91,7 +93,7 @@ avec des hashes scrypt créés à coût réduit. Le test du vrai classeur lit
 ## Secrets
 
 - La clé OMDb est **uniquement dans `.env`**, qui est ignoré par git. Ne jamais l'écrire dans un fichier suivi, un log commité, une consigne copiée dans le repo ou une requête vers un service tiers autre qu'OMDb.
-- Ne jamais commiter de mots de passe. Les comptes (hashes scrypt) et sessions (hashes SHA-256) vivent en base v3 ; les archives de données doivent rester privées. Changer un mot de passe ou supprimer un compte révoque ses sessions.
+- Ne jamais commiter de mots de passe. Les comptes (hashes scrypt) et sessions (hashes SHA-256) vivent en base v4 ; les archives de données doivent rester privées. Changer un mot de passe ou supprimer un compte révoque ses sessions.
 - Avant chaque commit : `grep -rl "<clé>" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist .` ne doit renvoyer que `./.env`.
 - User-Agent des appels externes : `filmsvus-local/0.1`, sans aucune info personnelle.
 

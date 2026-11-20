@@ -80,6 +80,12 @@ Le frontend utilise React 19, React Router, Vite 8 et du CSS natif :
 - `/stats` : indicateurs, années/mois, distributions par personne, classements,
   réalisateurs, genres, décennies, nuage IMDb à partir de 3 films comparables et
   taux d’enrichissement. SVG maison avec tableaux de données accessibles.
+- `/renoter` (connexion requise) : films vus depuis au moins deux années calendaires UTC,
+  proposés au hasard sans notes ni souvenirs personnels. Saisir les deux notes de mémoire
+  révèle les originales et leur différence. Chaque film passe une seule fois ; « Ignorer »
+  le retire et « Plus tard » le met de côté pour la session. La renote est visible sur
+  la fiche et annulable après confirmation inline, sans modifier les notes d’origine,
+  moyennes, tris, filtres ou statistiques.
 - `/connexion` : connexion, compte connecté et déconnexion. L'ajout redirige
   ici si nécessaire ; `?next=` permet de retrouver la page interne demandée.
 
@@ -144,6 +150,8 @@ et `POST /api/auth/logout` sont accessibles sans session ; toutes les réponses
 `/api/auth/*` portent `Cache-Control: no-store`.
 
 API avec session : `GET /api/search?q=`, `GET /api/omdb/budget` (HEAD aussi),
+`GET /api/rerate/next?exclude=1,2`, `POST /api/rerate/:id`
+(`{"scores":{"1":8,"2":5}}`), `POST /api/rerate/:id/ignore`, `DELETE /api/rerate/:id`,
 `POST /api/films`, `PATCH/DELETE /api/films/:id`,
 `PUT /api/films/:id/ratings` (`{"ratings":[{"viewer_id":1,"score":8}]}`),
 `PUT /api/films/:id/tags` (`{"tag_ids":[1]}`), `POST /api/films/:id/hydrate`,
@@ -159,7 +167,9 @@ et `api_log.raw_response` permet le cache durable prévu par le plan.
 suppression des spectateurs non core et de leurs notes, normalisation des scores,
 contrainte entière 0–10, retrait de l'ancien lien externe et ajout de `plot_fr`.
 La migration v3 ajoute `users` et `sessions`, sans modifier les films. Une base
-neuve atteint le même schéma ; une version supérieure à 3 est refusée.
+neuve atteint le même schéma. La migration v4 ajoute `rerates` et `rerate_scores`
+dans une transaction, sans modifier les données existantes. Les exports incluent
+ces tables ; une version supérieure à 4 est refusée.
 Le test du vrai classeur lit `data/source/filmsvus.xlsx` en lecture seule.
 
 ## Déploiement

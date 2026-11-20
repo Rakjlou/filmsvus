@@ -10,10 +10,43 @@ import { candidateSelection, normalizeCandidate } from '../web/search.ts';
 import { dansMaPeau, knivesOut } from './fixtures/wikidata.ts';
 import { safeNext } from '../web/authNavigation.ts';
 import { api, json, message } from '../web/api.ts';
+import { parseRerateExclusions, rerateCount, rerateDate, rerateDelta, rerateSynopsisOverflows } from '../web/rerate.ts';
+import { ReratesRepo } from '../server/repo/rerates.ts';
+
+test('renote : bouton du synopsis selon les lignes rendues, avec tolérance aux arrondis', () => {
+  assert.equal(rerateSynopsisOverflows(27, 26.75), false);
+  assert.equal(rerateSynopsisOverflows(107, 26.75), false);
+  assert.equal(rerateSynopsisOverflows(108, 26.75), false);
+  assert.equal(rerateSynopsisOverflows(134, 26.75), true);
+  // The full scroll height remains measurable while clamped or expanded;
+  // wrapping onto fewer lines after a resize removes the toggle.
+  assert.equal(rerateSynopsisOverflows(535, 26.75), true);
+  assert.equal(rerateSynopsisOverflows(80, 26.75), false);
+});
 
 test('connexion : retour interne uniquement, y compris URLs trompeuses', () => {
   for (const path of [null, '', 'https://evil.example', '//evil.example', '/\\evil.example', '/\n/evil.example']) assert.equal(safeNext(path), '/');
   for (const path of ['/ajouter', '/film/42?x=1#notes', '/?sort=title&dir=asc']) assert.equal(safeNext(path), path);
+});
+
+test('renote : différences, date française, pluriels et exclusions de session', () => {
+  assert.deepEqual([null, 0, 1, -2, 10, -10].map(rerateDelta), ['—', '=', '+1', '−2', '+10', '−10']);
+  assert.equal(rerateDate('2026-11-20T12:00:00Z'), '20/11/2026');
+  assert.deepEqual([0, 1, 2].map(rerateCount), ['0 film à renoter', '1 film à renoter', '2 films à renoter']);
+  for (const input of [null, '', 'invalid', '{}', 'null']) assert.deepEqual(parseRerateExclusions(input), []);
+  assert.deepEqual(parseRerateExclusions('[1,2,1,0,-1,1.5,"3",null]'), [1, 2]);
+  assert.equal(parseRerateExclusions(JSON.stringify(Array.from({ length: 501 }, (_, i) => i + 1))).length, 500);
+});
+
+test('renote : tri, filtres et calculs de la collection restent fondés sur les originaux', t => {
+  const repo = new FilmsRepo(tempDb(t));
+  const film = repo.create({ title: 'Renoté', watched_at: '2020-01-01T00:00:00Z',
+    ratings: [{ viewer_id: 1, score: 2 }, { viewer_id: 2, score: 4 }] });
+  repo.create({ title: 'Autre', watched_at: '2020-02-01T00:00:00Z', ratings: [{ viewer_id: 1, score: 7 }, { viewer_id: 2, score: 9 }] });
+  const params = [new URLSearchParams('sort=avg&dir=desc'), new URLSearchParams('max=4'), new URLSearchParams('gap=2')];
+  const before = params.map(p => selectFilms(repo.list(), p).map(f => [f.id, f.avg, f.gap]));
+  new ReratesRepo(repo, () => Date.parse('2026-11-20T12:00:00Z')).rate(film.id, { 1: 10, 2: 10 });
+  assert.deepEqual(params.map(p => selectFilms(repo.list(), p).map(f => [f.id, f.avg, f.gap])), before);
 });
 
 test('client API : 401 invalide la session, erreur française et message 429 de connexion conservé', async t => {
@@ -36,6 +69,15 @@ test('client API : 401 invalide la session, erreur française et message 429 de 
   await assert.rejects(api('/auth/login', json('POST', {})), /identifiant et votre mot de passe/);
   await assert.rejects(api('/films', json('POST', {})), /Vérifiez les champs/);
   assert.equal(message(new Error('Erreur')), 'Erreur');
+});
+
+test('renote : le client conserve le message de conflit et signale les erreurs réseau en français', async t => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'RerateConflict', message: 'Ce film a déjà été renoté. Passez au film suivant.' }), { status: 409 });
+  await assert.rejects(api('/rerate/1', json('POST', { scores: { 1: 8, 2: 5 } })), /déjà été renoté/);
+  globalThis.fetch = async () => { throw new TypeError('offline'); };
+  await assert.rejects(api('/rerate/next'), /Impossible de joindre le serveur/);
 });
 
 test('titres affichés : original latin, français discret, original non latin et normalisation', () => {

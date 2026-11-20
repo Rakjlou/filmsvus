@@ -9,6 +9,11 @@ export interface Rating extends Viewer { score: number | null }
 export interface Tag { id: number; label: string; emoji: string | null; color: string | null }
 export interface Credit { role: Role; name: string; position: number; source: Source }
 export interface Company { name: string; source: Source }
+export interface RerateScore {
+  viewer_id: number; name: string; score: number; original: number | null; delta: number | null;
+}
+export interface Rerate { created_at: string; scores: RerateScore[] }
+export interface RerateReveal extends Rerate { film_id: number }
 export interface FilmFields {
   title: string; title_fr: string | null; original_title: string | null;
   year: number | null; watched_at: string; director_text: string | null;
@@ -26,6 +31,7 @@ export interface Film extends FilmFields {
   avg: number | null; gap: number | null;
   tags: Tag[]; credits: Credit[]; companies: Company[];
   poster_url: string | null; hydrated: boolean;
+  rerate: Rerate | null;
 }
 export interface RatingInput { viewer_id: number; score: number | null }
 export type FilmInput = Partial<FilmFields> & {
@@ -110,6 +116,7 @@ export class FilmsRepo {
         companies: (byCompany.get(filmId) ?? []).map(({ film_id, ...company }) => company),
         poster_url: row.poster_path ? `/posters/${row.poster_path}` : null,
         hydrated: Boolean(row.hydrated_at),
+        rerate: detail ? this.rerate(filmId) : null,
       } as unknown as Film;
       if (!detail) {
         // Raw provider responses are useful on the detail endpoint only.
@@ -123,6 +130,16 @@ export class FilmsRepo {
     const film = this.list(true, id)[0];
     if (!film) throw new NotFound('Film introuvable');
     return film;
+  }
+  rerate(id: number): Rerate | null {
+    const row = this.db.prepare("SELECT created_at FROM rerates WHERE film_id=? AND status='rated'").get(id);
+    if (!row) return null;
+    const scores = this.db.prepare(`SELECT s.viewer_id,v.name,s.score,r.score AS original,
+      CASE WHEN r.score IS NULL THEN NULL ELSE s.score-r.score END AS delta
+      FROM rerate_scores s JOIN viewers v ON v.id=s.viewer_id
+      LEFT JOIN ratings r ON r.film_id=s.film_id AND r.viewer_id=s.viewer_id
+      WHERE s.film_id=? ORDER BY s.viewer_id`).all(id) as unknown as RerateScore[];
+    return { created_at: String(row.created_at), scores };
   }
   writeFields(id: number, fields: FilmInput): void {
     const entries = Object.entries(fields).filter(([key, value]) => columns.has(key) && value !== undefined);

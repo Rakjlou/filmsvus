@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-export const SUPPORTED_DB_VERSION = 3;
+export const SUPPORTED_DB_VERSION = 4;
 
 export function transaction<T>(db: DatabaseSync, work: () => T): T {
   db.exec('BEGIN IMMEDIATE');
@@ -59,6 +59,22 @@ export function migrate(db: DatabaseSync): void {
       );
       CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
       PRAGMA user_version = 3;
+    `);
+  });
+  if (version < 4) transaction(db, () => {
+    db.exec(`
+      CREATE TABLE rerates (
+        film_id INTEGER PRIMARY KEY REFERENCES films(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK(status IN ('rated','ignored')),
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE rerate_scores (
+        film_id INTEGER NOT NULL REFERENCES rerates(film_id) ON DELETE CASCADE,
+        viewer_id INTEGER NOT NULL REFERENCES viewers(id),
+        score INTEGER NOT NULL CHECK(typeof(score)='integer' AND score BETWEEN 0 AND 10),
+        PRIMARY KEY(film_id, viewer_id)
+      );
+      PRAGMA user_version = 4;
     `);
   });
 }

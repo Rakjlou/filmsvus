@@ -14,7 +14,7 @@ test('migration versionnée, seed et contraintes SQLite', t => {
   const db = tempDb(t);
   migrate(db);
   const repo = new FilmsRepo(db);
-  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 3);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 4);
   assert.deepEqual(repo.viewers().map(v => [v.name, v.is_core]), [['Fleur', true], ['Noé', true]]);
   assert.equal(repo.tags()[0]!.label, '+1'); assert.equal(repo.tags()[0]!.emoji, '😭');
   const film = repo.create({ title: 'Contraintes' });

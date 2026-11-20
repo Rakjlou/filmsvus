@@ -146,7 +146,7 @@ sudo -u filmsvus -H bash -c 'cd /home/filmsvus/site && ~/.local/bin/node --env-f
 
 Le hook retire `config/nginx.d/filmsvus-auth.conf` et `config/htpasswd` ; nginx-site
 recharge nginx après le démarrage de l'application. La base migre automatiquement
-en v3 au démarrage ou via la CLI. Entre la mise à jour et la création des comptes,
+en v4 au démarrage ou via la CLI. Entre la mise à jour et la création des comptes,
 le site est public en lecture seule et personne ne peut éditer : cette transition
 est sûre. Vérifier dans une fenêtre déconnectée que liste, fiches et statistiques
 restent lisibles, que recherche/ajout/édition exigent une connexion, puis tester

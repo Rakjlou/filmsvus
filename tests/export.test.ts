@@ -9,6 +9,7 @@ import { exportData, inspectDatabase } from '../server/db/export.ts';
 import { openDatabase, SUPPORTED_DB_VERSION } from '../server/db/index.ts';
 import { checkDatabase } from '../scripts/check-db.ts';
 import { FilmsRepo } from '../server/repo/films.ts';
+import { ReratesRepo } from '../server/repo/rerates.ts';
 import { tempDir } from './helpers.ts';
 
 const now = new Date('2026-11-15T15:04:03Z');
@@ -19,8 +20,11 @@ test('export: coherent snapshot of an open WAL database, safe posters and manife
   const root = tempDir(t), dbPath = join(root, 'source.db'), postersDir = join(root, 'images');
   const db = openDatabase(dbPath);
   const repo = new FilmsRepo(db);
-  repo.create({ title: 'Avec affiche', poster_path: 'tt1234567.jpg' });
-  repo.create({ title: 'Sans affiche' });
+  const rated = repo.create({ title: 'Avec affiche', watched_at: '2020-01-01T00:00:00Z', poster_path: 'tt1234567.jpg' });
+  const ignored = repo.create({ title: 'Sans affiche', watched_at: '2020-01-02T00:00:00Z' });
+  const rerates = new ReratesRepo(repo, () => now.getTime());
+  rerates.rate(rated.id, { 1: 8, 2: 5 });
+  rerates.ignore(ignored.id);
   db.exec("INSERT INTO api_log(provider,request_key,status,at,raw_response) VALUES ('omdb','test',200,'2026-11-15','{}')");
   assert.ok(existsSync(`${dbPath}-wal`));
   const before = db.prepare('SELECT * FROM films ORDER BY id').all();
@@ -46,6 +50,10 @@ test('export: coherent snapshot of an open WAL database, safe posters and manife
     assert.equal(copy.prepare('PRAGMA integrity_check').get()!.integrity_check, 'ok');
     assert.deepEqual(copy.prepare('SELECT * FROM films ORDER BY id').all(), before);
     assert.equal(copy.prepare('SELECT count(*) AS n FROM api_log').get()!.n, 1);
+    for (const table of ['rerates', 'rerate_scores']) {
+      assert.deepEqual(copy.prepare(`SELECT * FROM ${table} ORDER BY film_id`).all(), db.prepare(`SELECT * FROM ${table} ORDER BY film_id`).all());
+    }
+    assert.deepEqual(copy.prepare('PRAGMA foreign_key_check').all(), []);
     repo.create({ title: 'Ajout après instantané' });
     assert.equal(copy.prepare('SELECT count(*) AS n FROM films').get()!.n, 2);
   } finally { copy.close(); }

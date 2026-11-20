@@ -4,6 +4,7 @@ import type { Candidate, Film, Role, SearchResponse, Viewer } from '../types.ts'
 import type { WikidataCandidate } from '../../server/services/wikidata.ts';
 import { api, json, message, useResource } from '../api.ts';
 import { date, number } from '../format.ts';
+import { rerateDate, rerateDelta } from '../rerate.ts';
 import { Poster } from '../components/Poster.tsx';
 import { Score } from '../components/FilmCard.tsx';
 import { FilmForm } from '../components/FilmForm.tsx';
@@ -24,6 +25,7 @@ export function FilmPage() {
   const [editing, setEditing] = useState(false), [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [imdb, setImdb] = useState(''), [candidates, setCandidates] = useState<Candidate[]>();
+  const [confirmRerateDelete, setConfirmRerateDelete] = useState(false);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const film = resource.data;
   const credits = film ? roles.map(([role, label]) => {
@@ -66,7 +68,23 @@ export function FilmPage() {
     }, 3000);
     return () => { controller.abort(); window.clearInterval(interval); };
   }, [id, routeState?.added, film?.hydrated, film?.needs_review, Boolean(film), editing, resource.setData]);
-  useEffect(() => { if (!canEdit) { setEditing(false); setConfirmDelete(false); } }, [canEdit]);
+  useEffect(() => { if (!canEdit) { setEditing(false); setConfirmDelete(false); setConfirmRerateDelete(false); } }, [canEdit]);
+  useEffect(() => {
+    if (!confirmRerateDelete) return;
+    const timeout = window.setTimeout(() => setConfirmRerateDelete(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [confirmRerateDelete]);
+  async function cancelRerate() {
+    if (!confirmRerateDelete) { setConfirmRerateDelete(true); return; }
+    setBusy(true); setError('');
+    try {
+      await api(`/rerate/${id}`, json('DELETE'));
+      resource.setData(await api<Film>(`/films/${id}`));
+      setNotice('La renote est annulée. Ce film peut à nouveau être renoté.');
+      setConfirmRerateDelete(false);
+    } catch (error) { setError(message(error)); }
+    finally { setBusy(false); }
+  }
   async function hydrate(candidateId?: string) {
     if (!film) return;
     setBusy(true); setError(''); setNotice(''); setCandidates(undefined);
@@ -99,6 +117,10 @@ export function FilmPage() {
       {canEdit && routeState?.added && !notice && <p className="notice" role="status">{film.hydrated ? 'Séance enregistrée et film enrichi.' : film.needs_review ? 'Séance enregistrée. Vérifiez le film IMDb pour compléter les informations.' : 'Séance enregistrée. L’enrichissement se poursuit en arrière-plan.'}</p>}
       {editing ? <section className="surface edit-panel" aria-label="Modifier le film">{viewers.loading && <Loading />}{viewers.error && <ErrorMessage retry={viewers.reload}>{viewers.error}</ErrorMessage>}{viewers.data && <FilmForm film={film} viewers={viewers.data} onCancel={() => setEditing(false)} onSaved={updated => { resource.setData(updated); setEditing(false); setNotice('Vos modifications sont enregistrées.'); }} />}</section> : <>
         <section className="ratings-panel" aria-label="Les notes"><div className="couple-rating"><span className="eyebrow">Notre moyenne</span><Score value={film.avg} /><span className="hint">Fleur & Noé</span></div><div className="individual-ratings">{film.ratings.filter(r => r.is_core).map(r => <div key={r.id}><span>{r.name}</span><Score small value={r.score} /></div>)}<div className="derived-rating"><span>Écart F / N</span><span>{number(film.gap)} <small>pts</small></span></div></div></section>
+        {film.rerate && <section className="rerate-note" aria-label="Renote de mémoire">
+          <p>Renoté le {rerateDate(film.rerate.created_at)} : {film.rerate.scores.map(score => `${score.name} ${score.score} (${rerateDelta(score.delta)})`).join(' · ')}</p>
+          {canEdit && <button type="button" className="text-button rerate-cancel" disabled={busy} onBlur={() => setConfirmRerateDelete(false)} onClick={() => void cancelRerate()}>{confirmRerateDelete ? "confirmer l’annulation ?" : 'annuler la renote'}</button>}
+        </section>}
         {film.tags.length > 0 && <section className="detail-tags"><h2>Souvenirs de séance</h2><div className="chips">{film.tags.map(tag => <span className="tag-label" key={tag.id}>{tag.emoji} {tag.label}</span>)}</div></section>}
         <section className="prose-section"><p className="eyebrow">L’histoire</p><h2>Synopsis</h2><p className="preserve-lines">{film.summary || film.plot_fr || film.plot_en || (canEdit ? 'Le résumé arrivera avec l’enrichissement. Vous pouvez aussi écrire le vôtre.' : 'Aucun synopsis pour le moment.')}</p>{!film.summary && (film.plot_fr ? <p className="hint">Synopsis issu de Wikipédia.</p> : film.plot_en && <p className="hint">Synopsis original, en anglais, fourni par OMDb.</p>)}</section>
         {(canEdit || film.comment) && <section className="prose-section comment-section"><p className="eyebrow">Après la séance</p><h2>Notre commentaire</h2><p className="preserve-lines">{film.comment || 'Pas encore de commentaire. Qu’est-ce qu’on en garde ?'}</p></section>}

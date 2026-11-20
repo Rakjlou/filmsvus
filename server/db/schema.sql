@@ -1,4 +1,5 @@
--- v1 bootstrap: openDatabase always applies subsequent versioned migrations.
+-- v1 bootstrap: openDatabase always applies subsequent versioned migrations through v4
+-- (including rerates and rerate_scores); keep this historical schema for legacy imports.
 CREATE TABLE films (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL CHECK(length(trim(title)) > 0),

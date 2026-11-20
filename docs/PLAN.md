@@ -54,6 +54,8 @@ tests/                  node:test (import parsing, stats, omdb budget, routes vi
 - `api_log` : provider, request_key, status, at → compteur de budget OMDb du jour + cache des réponses brutes (une réponse déjà reçue ne se redemande jamais).
 
 ## Fonctionnalités
+**Renoter** (`/renoter`, connexion requise, migration v4) : chaque film vu depuis au moins deux années calendaires UTC passe une seule fois dans une file aléatoire. La fiche masque notes du couple, moyenne, écart, résumé personnel, commentaire et tags ; les synopsis publics et notes externes restent visibles. Fleur et Noé saisissent chacun une note entière de 0 à 10 avant de découvrir les originaux et leur différence. On peut ignorer définitivement un film ou le remettre à plus tard pour la session. Les renotes sont affichées sur les fiches publiques, annulables après confirmation inline par un utilisateur connecté, et n’interviennent dans aucun calcul, tri ou filtre. Tables `rerates` (statut rated/ignored, date) et `rerate_scores` (deux notes), incluses dans l’export SQLite ; notes originales conservées.
+
 1. **Liste** (`/`) : vue cartes avec affiche (fallback joli : initiales + couleur) et vue compacte ; état (tri, filtres, recherche, vue) dans l'URL.
    - **Tris** (asc/desc) : date de visionnage, titre, note moyenne, note Fleur, note Noé, écart, année de sortie, durée, note IMDb, Metascore, réalisateur, date d'ajout.
    - **Filtres** : recherche texte (titre, réal, résumé, commentaire, crew), tags, genre, réal, année vue, décennie de sortie, plage de note, « non noté », « non hydraté », désaccord ≥ N. Sur mobile : bottom sheet.
@@ -64,6 +66,8 @@ tests/                  node:test (import parsing, stats, omdb budget, routes vi
 5. **Hydratation** : `npm run hydrate -- --limit 50` ; résolution titre→IMDb par OMDb `t=` + année approchée, sinon marque `needs_review` pour choix manuel dans l'UI. Respect du budget quotidien (`OMDB_DAILY_BUDGET`), throttle ~1 req/s pour OMDb et Wikidata (User-Agent générique).
 
 ## API (extrait)
+Renotes (session requise) : `GET /api/rerate/next?exclude=1,2`, `POST /api/rerate/:id` (`scores` indexé par identifiant des deux spectateurs core), `POST /api/rerate/:id/ignore`, `DELETE /api/rerate/:id`. La fiche publique `GET /api/films/:id` inclut `rerate` (date et comparaison des scores), ou null.
+
 `GET/POST /api/films`, `GET/PATCH/DELETE /api/films/:id`, `PUT /api/films/:id/ratings`, `PUT /api/films/:id/tags`, `POST /api/films/:id/hydrate`, `GET /api/search?q=` (OMDb, compte au budget), `GET/POST /api/tags`, `GET /api/viewers`, `GET /api/stats`, `GET /api/omdb/budget`.
 
 ## Orchestration & commits

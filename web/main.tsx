@@ -4,6 +4,7 @@ import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from 'react-
 import { ListPage } from './pages/List.tsx';
 import { FilmPage } from './pages/Film.tsx';
 import { AddPage } from './pages/Add.tsx';
+import { ReratePage } from './pages/Rerate.tsx';
 import { StatsPage } from './pages/Stats.tsx';
 import { Icon } from './components/Icon.tsx';
 import { Empty } from './components/Feedback.tsx';
@@ -30,13 +31,13 @@ function App() {
   const location = useLocation();
   const { user, canEdit } = useAuth();
   useEffect(() => {
-    const title = location.pathname === '/' ? 'La collection' : location.pathname === '/ajouter' ? 'Ajouter une séance' : location.pathname === '/stats' ? 'Nos statistiques' : location.pathname === '/connexion' ? 'Connexion' : 'La fiche';
+    const title = location.pathname === '/' ? 'La collection' : location.pathname === '/ajouter' ? 'Ajouter une séance' : location.pathname === '/renoter' ? 'Renoter' : location.pathname === '/stats' ? 'Nos statistiques' : location.pathname === '/connexion' ? 'Connexion' : 'La fiche';
     document.title = `${title} · Films vus`;
     document.getElementById('main')?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }, [location.pathname]);
-  return <><a className="skip-link" href="#main">Aller au contenu</a><header className="site-header"><div className="header-inner"><Link className="brand" to="/" aria-label="Films vus, accueil"><span className="brand-mark"><Icon name="film" /></span><span>films <i>vus.</i></span></Link><span className="brand-subtitle">LE CARNET DE FLEUR & NOÉ</span><nav className="main-nav" aria-label="Navigation principale"><NavLink to="/" end><Icon name="film" /><span>Liste</span></NavLink>{canEdit && <NavLink to="/ajouter"><Icon name="plus" /><span>Ajouter</span></NavLink>}<NavLink to="/stats"><Icon name="stats" /><span>Stats</span></NavLink>{!user && <NavLink to="/connexion"><Icon name="account" /><span>Connexion</span></NavLink>}</nav>{canEdit && <Link className="icon-button button account-control" to="/connexion" title={`Compte : ${user?.username}`} aria-label={`Compte de ${user?.username}`}><Icon name="account" /></Link>}<ThemeToggle /></div></header>
-    <main id="main" className="page-shell" tabIndex={-1}><Routes><Route path="/" element={<ListPage />} /><Route path="/film/:id" element={<FilmPage key={location.pathname} />} /><Route path="/ajouter" element={<RequireAuth><AddPage /></RequireAuth>} /><Route path="/connexion" element={<LoginPage />} /><Route path="/stats" element={<StatsPage />} /><Route path="*" element={<Empty title="Cette salle n’existe pas."><Link className="button" to="/">Retour à la collection</Link></Empty>} /></Routes></main>
+  return <><a className="skip-link" href="#main">Aller au contenu</a><header className="site-header"><div className="header-inner"><Link className="brand" to="/" aria-label="Films vus, accueil"><span className="brand-mark"><Icon name="film" /></span><span>films <i>vus.</i></span></Link><span className="brand-subtitle">LE CARNET DE FLEUR & NOÉ</span><nav className={`main-nav${canEdit ? ' main-nav-editable' : ''}`} aria-label="Navigation principale"><NavLink to="/" end><Icon name="film" /><span>Liste</span></NavLink>{canEdit && <NavLink to="/ajouter"><Icon name="plus" /><span>Ajouter</span></NavLink>}{canEdit && <NavLink to="/renoter"><Icon name="rerate" /><span>Renoter</span></NavLink>}<NavLink to="/stats"><Icon name="stats" /><span>Stats</span></NavLink>{!user && <NavLink to="/connexion"><Icon name="account" /><span>Connexion</span></NavLink>}</nav>{canEdit && <Link className="icon-button button account-control" to="/connexion" title={`Compte : ${user?.username}`} aria-label={`Compte de ${user?.username}`}><Icon name="account" /></Link>}<ThemeToggle /></div></header>
+    <main id="main" className="page-shell" tabIndex={-1}><Routes><Route path="/" element={<ListPage />} /><Route path="/film/:id" element={<FilmPage key={location.pathname} />} /><Route path="/ajouter" element={<RequireAuth><AddPage /></RequireAuth>} /><Route path="/renoter" element={<RequireAuth><ReratePage /></RequireAuth>} /><Route path="/connexion" element={<LoginPage />} /><Route path="/stats" element={<StatsPage />} /><Route path="*" element={<Empty title="Cette salle n’existe pas."><Link className="button" to="/">Retour à la collection</Link></Empty>} /></Routes></main>
     <footer className="site-footer"><span className="footer-rule" /><p>Le cinéma se partage. Les avis, pas toujours.</p><span>FLEUR & NOÉ · FILMS VUS</span></footer></>;
 }
 createRoot(document.getElementById('root')!).render(<StrictMode><BrowserRouter><AuthProvider><App /></AuthProvider></BrowserRouter></StrictMode>);

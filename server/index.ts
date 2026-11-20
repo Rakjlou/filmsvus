@@ -6,6 +6,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { openDatabase } from './db/index.ts';
 import { FilmsRepo } from './repo/films.ts';
+import { ReratesRepo } from './repo/rerates.ts';
+import { rerateRoutes } from './routes/rerates.ts';
 import { OmdbClient } from './services/omdb.ts';
 import { WikidataClient } from './services/wikidata.ts';
 import { Hydrator } from './services/hydrate.ts';
@@ -64,6 +66,7 @@ export function buildApp(options: AppOptions = {}) {
     return reply.code(status).send({ error: error.name, message: status === 500 ? 'Erreur interne' : error.message });
   });
   filmRoutes(app, repo, hydrator, schedule);
+  rerateRoutes(app, new ReratesRepo(repo, now));
   tagRoutes(app, repo);
   viewerRoutes(app, repo);
   statsRoutes(app, repo);
